@@ -94,7 +94,7 @@ rule prepare_input:
         sra_accession = lambda wildcards: get_sra_accession(wildcards, config) if get_input_type(wildcards, config) == "sra" else None,
         temp_dir = lambda wildcards: f"{wildcards.sample}.temp",
         sample = "{sample}"
-    threads: 8
+    threads: 4
     log:
         f"{log_dir}/01_prepare_input/{{sample}}.log"
     benchmark:
@@ -857,7 +857,10 @@ rule map_reads_to_reference:
             outm={output.bam} \
             perfectmode=t \
             threads={threads} \
-            pairedonly=t
+            pairedonly=t \
+            ow=t \
+            nodisk=t \
+            -Xmx16g
         else
             # Mapping with Minimap2 for long reads
             minimap2 -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
