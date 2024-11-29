@@ -829,6 +829,21 @@ rule decompress_reference_archive:
         fi
         """
 
+rule concatenate_argos_fasta_for_baiting:
+    """
+    Concatenate all the ARGOS sequences into a single compressed FASTA file.
+    """
+    input:
+        references = expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list)
+    output:
+        "resources/argos.fa.gz"
+    params:
+        dir = reference_decompressed_dir
+    shell:
+        """
+        find {params.dir} -name '*.fasta.gz' -exec cat {{}} + > {output}
+        """
+
 rule map_reads_to_reference:
     """
     Map reads to a single reference sequence and generate a BAM file.

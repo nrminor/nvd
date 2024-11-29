@@ -9,8 +9,8 @@ global:
   out_dir: output
   gettax_sqlite_path: resources/gettax.sqlite
   # Add configurations for reference mapping FDA-ARGOS targets
-  reference_archive: "fda-argos-per-species-30843.tar.zst" 
-  reference_decompressed_dir: "fda-argos-per-species-fasta"
+  reference_archive: "resources/fda-argos-30843.tar.zst" 
+  reference_decompressed_dir: "resources/fda-argos-per-species-fasta"
 
   # List of reference sequences to use for mapping
   # If not specified, all references in the archive will be used by default
