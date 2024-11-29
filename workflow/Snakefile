@@ -9,6 +9,12 @@
 # docker run -it --user $(id -u):$(id -g) -v $(pwd)/:/scratch -w /scratch nvd:30575
 # snakemake --cores 10 --config run_id=`date +%s`
 
+import os
+import tarfile
+import shutil
+import pandas as pd
+from snakemake.shell import shell
+
 # Import utility functions
 from scripts.workflow_functions import (
     get_input_files,
@@ -39,6 +45,21 @@ stat_index = config['global']['stat_index'] # provided by Kenneth Katz, NCBI
 stat_annotation = config['global']['stat_annotation'] # provided by Kenneth Katz, NCBI
 final_output_path = f"{config['global']['out_dir']}/{experiment}" # for local tarball of results
 human_virus_taxlist = config['global']['human_virus_taxlist'] # human virus family taxa + arteriviridae
+
+# New configurations for reference mapping
+reference_archive = config["global"]["reference_archive"]
+reference_decompressed_dir = config["global"]["reference_decompressed_dir"]
+reference_sequences = config.get("global", {}).get("reference_sequences", [])
+
+if reference_sequences:
+    # Remove file extensions from reference names
+    reference_list = [os.path.splitext(os.path.splitext(ref)[0])[0] for ref in reference_sequences]
+else:
+    # Cannot list the directory before it exists, so raise an error
+    raise ValueError(
+        "No reference sequences specified in config.yaml under 'reference_sequences'. "
+        "Please specify the list of reference sequences to use."
+    )
 
 # Path to results directory
 local_output_dir = 'results'
@@ -73,7 +94,7 @@ rule prepare_input:
         sra_accession = lambda wildcards: get_sra_accession(wildcards, config) if get_input_type(wildcards, config) == "sra" else None,
         temp_dir = lambda wildcards: f"{wildcards.sample}.temp",
         sample = "{sample}"
-    threads: 1
+    threads: 8
     log:
         f"{log_dir}/01_prepare_input/{{sample}}.log"
     benchmark:
@@ -761,6 +782,252 @@ rule upload_files_to_labkey:
         f"{log_dir}/19_labkey/{{sample}}.files.log"
     script:
         "scripts/upload_files_to_labkey.py"
+
+## 2024-11-29 - add microbial non-viral targets ##
+rule all_microbial:
+    input:
+        # Decompress references
+        expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list),
+        # Filtered BAM files
+        expand(
+            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.filtered.bam",
+            sample=[s['name'] for s in config['samples']],
+            reference=reference_list
+        ),
+        # Mapped counts
+        expand(
+            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}_mapped_counts.txt",
+            sample=[s['name'] for s in config['samples']],
+            reference=reference_list
+        ),
+        # Total reads counts
+        expand(
+            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/total_reads.txt",
+            sample=[s['name'] for s in config['samples']]
+        ),
+        # Aggregate CSV
+        f"{local_output_dir}/22_map_reads_to_references/aggregate_mapping.csv"
+
+rule decompress_reference_archive:
+    """
+    Decompress the reference archive and ensure reference files are directly within the target directory.
+    """
+    input:
+        archive = reference_archive
+    output:
+        references = expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list)
+    shell:
+        """
+        mkdir -p {reference_decompressed_dir}
+        tar -I zstd -xvf {input.archive} -C {reference_decompressed_dir}
+        
+        # Move inner directory contents up if necessary
+        inner_dir=$(find {reference_decompressed_dir} -mindepth 1 -maxdepth 1 -type d)
+        if [ -d "$inner_dir" ]; then
+            mv "$inner_dir"/* {reference_decompressed_dir}/
+            rmdir "$inner_dir"
+        fi
+        """
+
+rule map_reads_to_reference:
+    """
+    Map reads to a single reference sequence and generate a BAM file.
+    If Illumina use bbmap to enable correct pairing handling
+    If ONT use minimap2 because pairs are not relevant
+    """
+    input:
+        reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz",
+        reference = f"{reference_decompressed_dir}/{{reference}}.fasta.gz"
+    output:
+        bam = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.bam"
+    threads: 4
+    log:
+        f"{log_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.log"
+    params:
+        mapper = lambda wildcards: "sr" if get_input_type(wildcards, config) not in ['ont', 'sra'] else "map-ont"
+    shell:
+        """
+        mkdir -p $(dirname {output.bam})
+
+        if [ "{params.mapper}" = "sr" ]; then
+            # Mapping with BBMap for short reads
+            bbmap.sh \
+            ref={input.reference} \
+            in={input.reads} \
+            outm={output.bam} \
+            perfectmode=t \
+            threads={threads} \
+            pairedonly=t
+        else
+            # Mapping with Minimap2 for long reads
+            minimap2 -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
+            | samtools view -b -F 0x4 - \
+            | samtools view -b -f 0x2 - \
+            | samtools sort -@ {threads} -o {output.bam} 2> {log}
+        fi
+        """
+
+rule filter_exact_microbial_matches:
+    """
+    Filter BAM file to retain only read pairs where both reads align perfectly (NM:i:0).
+    Used by ONT reads, since Illumina reads are exact matched with bbmap 
+    """
+    input:
+        bam = rules.map_reads_to_reference.output.bam,
+        reference = f"{reference_decompressed_dir}/{{reference}}.fasta.gz"
+    output:
+        filtered_bam = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.filtered.bam",
+        filtered_bai = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.filtered.bam.bai",
+    threads: 1
+    log:
+        f"{log_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.filter.log"
+    shell:
+        """
+        # first filter on no mismatches and no soft clips
+        # then find pairs that remain
+        reformat.sh \
+        in={input.bam} \
+        ref={input.reference} \
+        out=stdout.bam \
+        subfilter=0 \
+        clipfilter=0 \
+        threads={threads} \
+        | samtools sort \
+        - \
+        -o {output.filtered_bam} \
+        && samtools index {output.filtered_bam}
+        """
+
+rule count_mapped_microbial_reads:
+    """
+    Counts the number of reads mapped to the reference in the filtered BAM file.
+    Outputs a two-column file with sample name and number of mapped reads.
+    """
+    input:
+        bam = rules.filter_exact_microbial_matches.output.filtered_bam
+    output:
+        counts = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}_mapped_counts.txt"
+    log:
+        f"{log_dir}/22_map_reads_to_references/{{sample}}/{{reference}}_counts.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.counts})
+        samtools idxstats {input.bam} \
+        | awk '{{sum += $3}} END {{print "{wildcards.sample}\\t{wildcards.reference}\\t"sum}}' > {output.counts} 2> {log}
+        """
+
+rule count_total_microbial_reads:
+    """
+    Counts the total number of reads in the sample.
+    Outputs a file with sample name and total number of reads.
+    """
+    input:
+        reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz"
+    output:
+        counts = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/total_reads.txt"
+    log:
+        f"{log_dir}/22_map_reads_to_references/{{sample}}/total_reads.log"
+    params:
+        sample = f"{{sample}}"
+    shell:
+        """
+        zcat {input.reads} \
+        | awk -v sample="{params.sample}" 'NR % 4 == 0 {{count++}} END {{print sample "\\t" count}}' \
+        > {output.counts}
+        """
+
+rule aggregate_mapping_results:
+    """
+    Generate a CSV file aggregating mapping statistics across all references and samples.
+    """
+    input:
+        mapped_counts = expand(
+            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}_mapped_counts.txt",
+            sample=[s['name'] for s in config['samples']],
+            reference=reference_list
+        ),
+        total_reads_files = expand(
+            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/total_reads.txt",
+            sample=[s['name'] for s in config['samples']]
+        )
+    output:
+        csv = f"{local_output_dir}/22_map_reads_to_references/aggregate_mapping.csv"
+    run:
+        import pandas as pd
+        import logging
+
+        # Set up logging
+        log_file = output.csv.replace('.csv', '.log')
+        logging.basicConfig(
+            filename=log_file,
+            filemode='w',
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+
+        logging.info("Starting aggregation of mapping results.")
+
+        # Initialize dictionaries
+        total_reads_dict = {}
+        data = []
+
+        # Process total_reads_files
+        for total_reads_file in input.total_reads_files:
+            try:
+                with open(total_reads_file, 'r') as f:
+                    line = f.readline().strip()
+                    if not line:
+                        logging.warning(f"File {total_reads_file} is empty. Skipping.")
+                        continue
+                    parts = line.split('\t')
+                    if len(parts) != 2:
+                        logging.error(f"File {total_reads_file} has {len(parts)} fields. Expected 2. Skipping.")
+                        continue
+                    sample, total_reads = parts
+                    print(parts)
+                    total_reads = int(total_reads)
+                    print("test: " + str(total_reads))
+                    total_reads_dict[sample] = total_reads
+                    logging.info(f"Processed total_reads for sample '{sample}': {total_reads}")
+            except Exception as e:
+                logging.error(f"Error processing file {total_reads_file}: {e}")
+                continue
+
+        # Process mapped_counts files
+        for counts_file in input.mapped_counts:
+            try:
+                with open(counts_file, 'r') as f:
+                    line = f.readline().strip()
+                    if not line:
+                        logging.warning(f"File {counts_file} is empty. Skipping.")
+                        continue
+                    parts = line.split('\t')
+                    if len(parts) != 3:
+                        logging.error(f"File {counts_file} has {len(parts)} fields. Expected 3. Skipping.")
+                        continue
+                    sample, reference, mapped_reads = parts
+                    mapped_reads = int(mapped_reads)
+                    total_reads = total_reads_dict.get(sample, 0)
+                    data.append({
+                        "sample": sample,
+                        "reference": reference,
+                        "mapped_reads": mapped_reads,
+                        "total_reads": total_reads
+                    })
+                    logging.info(f"Processed mapped_reads for sample '{sample}', reference '{reference}': {mapped_reads}")
+            except Exception as e:
+                logging.error(f"Error processing file {counts_file}: {e}")
+                continue
+
+        # Create DataFrame and write to CSV
+        if data:
+            df = pd.DataFrame(data)
+            print(df)
+            df.to_csv(output.csv, index=False)
+            logging.info(f"Successfully wrote aggregated data to {output.csv}")
+        else:
+            logging.warning("No data to aggregate. CSV file will not be created.")
+
 
 ## Cleanup ##
 # Utility rule to run in isolation to remove existing output files.

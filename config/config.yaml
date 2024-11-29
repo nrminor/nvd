@@ -8,11 +8,66 @@ global:
   human_virus_taxlist: 'resources/human_viruses_taxlist.txt'
   out_dir: output
   gettax_sqlite_path: resources/gettax.sqlite
+  # Add configurations for reference mapping FDA-ARGOS targets
+  reference_archive: "fda-argos-per-species-30843.tar.zst" 
+  reference_decompressed_dir: "fda-argos-per-species-fasta"
+
+  # List of reference sequences to use for mapping
+  # If not specified, all references in the archive will be used by default
+  # Example:
+  # reference_sequences:
+  #   - Streptococcus_pneumoniae
+  #   - Streptomyces_californicus
+
+  reference_sequences:
+    - Campylobacter_coli
+    - Campylobacter_jejuni
+
 samples:
-- name: Illumina_test
-  r1_fastq: data/illumina.R1.fq.gz
-  r2_fastq: data/illumina.R2.fq.gz
-- name: ONT_test
-  ont: data/ont.fq.gz
-# - name: AE0000100A9532
-#   sra: SRR24010792
+  - name: "3776"
+    r1_fastq: "data/3776_S5_L004_R1_001.fastq.gz"
+    r2_fastq: "data/3776_S5_L004_R2_001.fastq.gz"
+
+  - name: "3806"
+    r1_fastq: "data/3806_S7_L004_R1_001.fastq.gz"
+    r2_fastq: "data/3806_S7_L004_R2_001.fastq.gz"
+
+  - name: "3831"
+    r1_fastq: "data/3831_S11_L004_R1_001.fastq.gz"
+    r2_fastq: "data/3831_S11_L004_R2_001.fastq.gz"
+
+  - name: "3874"
+    r1_fastq: "data/3874_S9_L004_R1_001.fastq.gz"
+    r2_fastq: "data/3874_S9_L004_R2_001.fastq.gz"
+
+  - name: "3907"
+    r1_fastq: "data/3907_S10_L004_R1_001.fastq.gz"
+    r2_fastq: "data/3907_S10_L004_R2_001.fastq.gz"
+
+  - name: "3914"
+    r1_fastq: "data/3914_S6_L004_R1_001.fastq.gz"
+    r2_fastq: "data/3914_S6_L004_R2_001.fastq.gz"
+
+  - name: "3932"
+    r1_fastq: "data/3932_S4_L004_R1_001.fastq.gz"
+    r2_fastq: "data/3932_S4_L004_R2_001.fastq.gz"
+
+  - name: "3937"
+    r1_fastq: "data/3937_S8_L004_R1_001.fastq.gz"
+    r2_fastq: "data/3937_S8_L004_R2_001.fastq.gz"
+
+  - name: "7430"
+    r1_fastq: "data/7430_S3_L004_R1_001.fastq.gz"
+    r2_fastq: "data/7430_S3_L004_R2_001.fastq.gz"
+
+  - name: "9A41"
+    r1_fastq: "data/9A41_S1_L004_R1_001.fastq.gz"
+    r2_fastq: "data/9A41_S1_L004_R2_001.fastq.gz"
+
+  - name: "A840"
+    r1_fastq: "data/A840_S2_L004_R1_001.fastq.gz"
+    r2_fastq: "data/A840_S2_L004_R2_001.fastq.gz"
+
+  - name: "neg-ctl"
+    r1_fastq: "data/neg-ctl_S12_L004_R1_001.fastq.gz"
+    r2_fastq: "data/neg-ctl_S12_L004_R2_001.fastq.gz"
