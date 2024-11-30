@@ -46,14 +46,14 @@ stat_annotation = config['global']['stat_annotation'] # provided by Kenneth Katz
 final_output_path = f"{config['global']['out_dir']}/{experiment}" # for local tarball of results
 human_virus_taxlist = config['global']['human_virus_taxlist'] # human virus family taxa + arteriviridae
 
-# New configurations for reference mapping
+# For FDA-ARGOS mapping
 reference_archive = config["global"]["reference_archive"]
 reference_decompressed_dir = config["global"]["reference_decompressed_dir"]
 reference_sequences = config.get("global", {}).get("reference_sequences", [])
 
 if reference_sequences:
     # Remove file extensions from reference names
-    reference_list = [os.path.splitext(os.path.splitext(ref)[0])[0] for ref in reference_sequences]
+    reference_list = [re.sub(r'\.fasta(?:\.gz)?$', '', os.path.basename(ref)) for ref in reference_sequences]
 else:
     # Cannot list the directory before it exists, so raise an error
     raise ValueError(
@@ -74,7 +74,7 @@ rule all:
             f"{{local_output_dir}}/19_labkey/{{sample}}.fasta.tkn",
             f"{{local_output_dir}}/20_map_reads_to_contigs/{{sample}}.bam",
             f"{{local_output_dir}}/21_create_tarball/{{sample}}.tar.zst",
-            f"{{local_output_dir}}/19_labkey/{{sample}}.upload.done"
+            f"{{local_output_dir}}/19_labkey/{{sample}}.upload.done",
         ],
         local_output_dir=local_output_dir,
         sample=[s['name'] for s in config['samples']]
@@ -784,6 +784,8 @@ rule upload_files_to_labkey:
         "scripts/upload_files_to_labkey.py"
 
 ## 2024-11-29 - add microbial non-viral targets ##
+# find reads that map exactly to FDA-ARGOS targets
+
 rule all_microbial:
     input:
         # Decompress references
@@ -808,9 +810,20 @@ rule all_microbial:
         # Aggregate CSV
         f"{local_output_dir}/22_map_reads_to_references/aggregate_mapping.csv"
 
-rule decompress_reference_archive:
+rule temp_microbial:
+    input:
+        # Decompress references
+        expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list),
+        # Baited sequences
+        expand(
+            f"{local_output_dir}/23_bait_exact_argos_matches/{{sample}}/argos_baited.fq.gz",
+            sample=[s['name'] for s in config['samples']],
+            reference=reference_list
+        ),
+
+rule decompress_argos_reference_archive:
     """
-    Decompress the reference archive and ensure reference files are directly within the target directory.
+    Decompress the FDA-ARGOS reference archive and ensure reference files are directly within the target directory.
     """
     input:
         archive = reference_archive
@@ -822,6 +835,7 @@ rule decompress_reference_archive:
         tar -I zstd -xvf {input.archive} -C {reference_decompressed_dir}
         
         # Move inner directory contents up if necessary
+        # Needed depending on how .tar.zst archive is created
         inner_dir=$(find {reference_decompressed_dir} -mindepth 1 -maxdepth 1 -type d)
         if [ -d "$inner_dir" ]; then
             mv "$inner_dir"/* {reference_decompressed_dir}/
@@ -832,6 +846,8 @@ rule decompress_reference_archive:
 rule concatenate_argos_fasta_for_baiting:
     """
     Concatenate all the ARGOS sequences into a single compressed FASTA file.
+    The FASTA file is a mapping target for baiting - finding all possible exact matches first
+    So that exhaustive searching is far more efficient.
     """
     input:
         references = expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list)
@@ -842,6 +858,49 @@ rule concatenate_argos_fasta_for_baiting:
     shell:
         """
         find {params.dir} -name '*.fasta.gz' -exec cat {{}} + > {output}
+        """
+
+rule bait_potential_argos_matches:
+    """
+    Map reads to concatenated ARGOS sequences to reduce number of exhaustive searches.
+    Save as .fq.gz to that reformat.sh can be used for finding exact matches 
+    by searching for subfilter=0 and clipfilter=0
+    """
+    input:
+        reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz",
+        reference = "resources/argos.fa.gz"
+    output:
+        fastq = f"{local_output_dir}/23_bait_exact_argos_matches/{{sample}}/argos_baited.fq.gz"
+    threads: 4
+    params:
+        mapper = lambda wildcards: "sr" if get_input_type(wildcards, config) not in ['ont', 'sra'] else "map-ont"
+    log:
+        f"{log_dir}/23_bait_exact_argos_matches/{{sample}}/argos_baited.log"
+    shell:
+        """
+        if [ "{params.mapper}" = "sr" ]; then
+            # Mapping with BBMap for short reads
+            bbmap.sh \
+            ref={input.reference} \
+            in={input.reads} \
+            outm={output.fastq} \
+            perfectmode=t \
+            threads={threads} \
+            pairedonly=t \
+            ow=t \
+            nodisk=t \
+            -Xmx16g 2> {log}
+        else
+            # Mapping with Minimap2 for long reads
+            minimap2 -eqx -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
+            | reformat.sh \
+            in=stdin.sam \
+            ref={input.reference} \
+            out={output.fastq} \
+            subfilter=0 \
+            clipfilter=0 \
+            -Xmx16g 2> {log}
+        fi
         """
 
 rule map_reads_to_reference:
