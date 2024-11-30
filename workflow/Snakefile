@@ -816,7 +816,7 @@ rule temp_microbial:
         expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list),
         # Baited sequences
         expand(
-            f"{local_output_dir}/23_bait_exact_argos_matches/{{sample}}/argos_baited.fq.gz",
+            f"{local_output_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.txt",
             sample=[s['name'] for s in config['samples']],
             reference=reference_list
         ),
@@ -860,49 +860,86 @@ rule concatenate_argos_fasta_for_baiting:
         find {params.dir} -name '*.fasta.gz' -exec cat {{}} + > {output}
         """
 
-rule bait_potential_argos_matches:
+rule argos_mapping:
     """
-    Map reads to concatenated ARGOS sequences to reduce number of exhaustive searches.
-    Save as .fq.gz to that reformat.sh can be used for finding exact matches 
-    by searching for subfilter=0 and clipfilter=0
+    Map reads to concatenated ARGOS sequences.
+    For Illumina reads, use bbmap to retain only perfect paired read matches
+    For ONT reads, use minimap2 and then reformat.sh to retain subfilter=0/clipfilter=0 mapped reads
+    Then sort and index BAM
     """
     input:
         reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz",
         reference = "resources/argos.fa.gz"
     output:
-        fastq = f"{local_output_dir}/23_bait_exact_argos_matches/{{sample}}/argos_baited.fq.gz"
-    threads: 4
+        bam = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam"
+    threads: 16
     params:
         mapper = lambda wildcards: "sr" if get_input_type(wildcards, config) not in ['ont', 'sra'] else "map-ont"
     log:
-        f"{log_dir}/23_bait_exact_argos_matches/{{sample}}/argos_baited.log"
+        f"{log_dir}/23_argos_mapping/{{sample}}/argos_baited.log"
     shell:
-        """
+       """
         if [ "{params.mapper}" = "sr" ]; then
             # Mapping with BBMap for short reads
-            bbmap.sh \
-            ref={input.reference} \
-            in={input.reads} \
-            outm={output.fastq} \
-            perfectmode=t \
-            threads={threads} \
-            pairedonly=t \
-            ow=t \
-            nodisk=t \
-            -Xmx16g 2> {log}
+            {{
+                bbmap.sh \
+                    ref={input.reference} \
+                    in={input.reads} \
+                    outm=stdout.bam \
+                    perfectmode=t \
+                    threads={threads} \
+                    mappedonly=t \
+                    pairedonly=t \
+                    ow=t \
+                    nodisk=t \
+                    ambig=all \
+                    -Xmx64g \
+                | samtools sort -o {output.bam} - \
+                    && samtools index {output.bam}
+            }} > {log} 2>&1
+        
         else
             # Mapping with Minimap2 for long reads
-            minimap2 -eqx -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
-            | reformat.sh \
-            in=stdin.sam \
-            ref={input.reference} \
-            out={output.fastq} \
-            subfilter=0 \
-            clipfilter=0 \
-            -Xmx16g 2> {log}
+            {{ 
+                minimap2 --eqx -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
+                | reformat.sh \
+                    in=stdin.sam \
+                    ref={input.reference} \
+                    out=stdout.bam \
+                    subfilter=0 \
+                    clipfilter=0 \
+                    mappedonly=t \
+                    -Xmx64g \
+                | samtools sort -o {output.bam} - \
+                    && samtools index {output.bam}
+            }} > {log} 2>&1
         fi
         """
 
+rule argos_genome_coverage:
+    """
+    Compute genome coverage for each contig.
+    Use samtools depth to determine per-base coverage,
+    then awk to compute the number of bases with coverage per contig.
+    """
+    input:
+        bam = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam"
+    output:
+        gc = f"{local_output_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.txt"
+    threads: 1
+    log:
+        f"{log_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.log"
+    benchmark:
+        f"{log_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.benchmark"
+    shell:
+        """
+        {{
+            samtools depth {input.bam} \
+            | awk '{{cov[$1] += ($3 > 0)}} END {{for (c in cov) print c, cov[c]}}' \
+            > {output.gc}
+        }} > {log} 2>&1
+        """
+    
 rule map_reads_to_reference:
     """
     Map reads to a single reference sequence and generate a BAM file.
