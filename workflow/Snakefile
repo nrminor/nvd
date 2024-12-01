@@ -816,10 +816,20 @@ rule temp_microbial:
         expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list),
         # Baited sequences
         expand(
-            f"{local_output_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.txt",
+            f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.bam",
             sample=[s['name'] for s in config['samples']],
             reference=reference_list
         ),
+        expand(
+            f"{local_output_dir}/25_mapped_reads/{{sample}}/{{sample}}.mapped_reads.txt",
+            sample=[s['name'] for s in config['samples']],
+            reference=reference_list
+        ),
+        expand(
+            f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.fa.gz",
+            sample=[s['name'] for s in config['samples']],
+            reference=reference_list
+        )
 
 rule decompress_argos_reference_archive:
     """
@@ -864,6 +874,7 @@ rule argos_mapping:
     """
     Map reads to concatenated ARGOS sequences.
     For Illumina reads, use bbmap to retain only perfect paired read matches
+    Use trimreaddescriptions=t to match ONT BAM format
     For ONT reads, use minimap2 and then reformat.sh to retain subfilter=0/clipfilter=0 mapped reads
     Then sort and index BAM
     """
@@ -871,7 +882,8 @@ rule argos_mapping:
         reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz",
         reference = "resources/argos.fa.gz"
     output:
-        bam = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam"
+        bam = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam",
+        bai = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam.bai"
     threads: 16
     params:
         mapper = lambda wildcards: "sr" if get_input_type(wildcards, config) not in ['ont', 'sra'] else "map-ont"
@@ -893,6 +905,7 @@ rule argos_mapping:
                     ow=t \
                     nodisk=t \
                     ambig=all \
+                    trimreaddescriptions=t \
                     -Xmx64g \
                 | samtools sort -o {output.bam} - \
                     && samtools index {output.bam}
@@ -939,209 +952,92 @@ rule argos_genome_coverage:
             > {output.gc}
         }} > {log} 2>&1
         """
-    
-rule map_reads_to_reference:
+
+rule argos_mapped_reads_per_contig:
     """
-    Map reads to a single reference sequence and generate a BAM file.
-    If Illumina use bbmap to enable correct pairing handling
-    If ONT use minimap2 because pairs are not relevant
+    Compute the number of mapped reads for each contig.
+    Filters out contigs with zero mapped reads.
+    Uses samtools idxstats to obtain per-contig read counts.
     """
     input:
-        reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz",
-        reference = f"{reference_decompressed_dir}/{{reference}}.fasta.gz"
+        bam = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam"
     output:
-        bam = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.bam"
-    threads: 4
-    log:
-        f"{log_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.log"
-    params:
-        mapper = lambda wildcards: "sr" if get_input_type(wildcards, config) not in ['ont', 'sra'] else "map-ont"
-    shell:
-        """
-        mkdir -p $(dirname {output.bam})
-
-        if [ "{params.mapper}" = "sr" ]; then
-            # Mapping with BBMap for short reads
-            bbmap.sh \
-            ref={input.reference} \
-            in={input.reads} \
-            outm={output.bam} \
-            perfectmode=t \
-            threads={threads} \
-            pairedonly=t \
-            ow=t \
-            nodisk=t \
-            -Xmx16g
-        else
-            # Mapping with Minimap2 for long reads
-            minimap2 -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
-            | samtools view -b -F 0x4 - \
-            | samtools view -b -f 0x2 - \
-            | samtools sort -@ {threads} -o {output.bam} 2> {log}
-        fi
-        """
-
-rule filter_exact_microbial_matches:
-    """
-    Filter BAM file to retain only read pairs where both reads align perfectly (NM:i:0).
-    Used by ONT reads, since Illumina reads are exact matched with bbmap 
-    """
-    input:
-        bam = rules.map_reads_to_reference.output.bam,
-        reference = f"{reference_decompressed_dir}/{{reference}}.fasta.gz"
-    output:
-        filtered_bam = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.filtered.bam",
-        filtered_bai = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.filtered.bam.bai",
+        mapped_reads = f"{local_output_dir}/25_mapped_reads/{{sample}}/{{sample}}.mapped_reads.txt"
     threads: 1
     log:
-        f"{log_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.filter.log"
+        f"{log_dir}/25_mapped_reads/{{sample}}/{{sample}}.mapped_reads.log"
+    benchmark:
+        f"{log_dir}/25_mapped_reads/{{sample}}/{{sample}}.mapped_reads.benchmark"
     shell:
         """
-        # first filter on no mismatches and no soft clips
-        # then find pairs that remain
-        reformat.sh \
-        in={input.bam} \
-        ref={input.reference} \
-        out=stdout.bam \
-        subfilter=0 \
-        clipfilter=0 \
-        threads={threads} \
-        | samtools sort \
-        - \
-        -o {output.filtered_bam} \
-        && samtools index {output.filtered_bam}
+        samtools idxstats {input.bam} | \
+        awk '$3 >= 1 {{print $1, $3}}' > {output.mapped_reads} 2> {log}
         """
 
-rule count_mapped_microbial_reads:
+rule hq_argos_contigs:
     """
-    Counts the number of reads mapped to the reference in the filtered BAM file.
-    Outputs a two-column file with sample name and number of mapped reads.
+    Extract contig names with genome coverage >= 500 bp and create a BED file.
     """
     input:
-        bam = rules.filter_exact_microbial_matches.output.filtered_bam
+        coverage = f"{local_output_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.txt",
+        idxstats = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam"
     output:
-        counts = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}_mapped_counts.txt"
+        bed = f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed"
     log:
-        f"{log_dir}/22_map_reads_to_references/{{sample}}/{{reference}}_counts.log"
+        f"{log_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.log"
+    benchmark:
+        f"{log_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.benchmark"
     shell:
         """
-        mkdir -p $(dirname {output.counts})
-        samtools idxstats {input.bam} \
-        | awk '{{sum += $3}} END {{print "{wildcards.sample}\\t{wildcards.reference}\\t"sum}}' > {output.counts} 2> {log}
+        # Extract contig lengths
+        samtools idxstats {input.idxstats} > {wildcards.sample}_contig_lengths.txt
+        
+        # Join coverage file with contig lengths on contig name
+        awk 'NR==FNR{{cov[$1]=$2; next}} $1 in cov && cov[$1]>=500 {{print $1"\t0\t"$2}}' {input.coverage} {wildcards.sample}_contig_lengths.txt > {output.bed}
+        
+        # Clean up
+        rm {wildcards.sample}_contig_lengths.txt
         """
 
-rule count_total_microbial_reads:
+rule extract_hq_bam:
     """
-    Counts the total number of reads in the sample.
-    Outputs a file with sample name and total number of reads.
+    Create a new BAM file containing only contigs with genome coverage >= 500 bp.
     """
     input:
-        reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz"
+        bam = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam",
+        bed = f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed"
     output:
-        counts = f"{local_output_dir}/22_map_reads_to_references/{{sample}}/total_reads.txt"
+        filtered_bam = f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.bam"
     log:
-        f"{log_dir}/22_map_reads_to_references/{{sample}}/total_reads.log"
-    params:
-        sample = f"{{sample}}"
+        f"{log_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.bam.log"
+    benchmark:
+        f"{log_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.bam.benchmark"
     shell:
         """
-        zcat {input.reads} \
-        | awk -v sample="{params.sample}" 'NR % 4 == 0 {{count++}} END {{print sample "\\t" count}}' \
-        > {output.counts}
+        samtools view -b -L {input.bed} {input.bam} > {output.filtered_bam} 2> {log}
         """
 
-rule aggregate_mapping_results:
+rule extract_hq_fasta:
     """
-    Generate a CSV file aggregating mapping statistics across all references and samples.
+    Extract reference sequences corresponding to contigs with genome coverage >= 500 bp.
     """
     input:
-        mapped_counts = expand(
-            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}_mapped_counts.txt",
-            sample=[s['name'] for s in config['samples']],
-            reference=reference_list
-        ),
-        total_reads_files = expand(
-            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/total_reads.txt",
-            sample=[s['name'] for s in config['samples']]
-        )
+        bed = f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed",
+        reference_fasta = "resources/argos.fa.gz"
     output:
-        csv = f"{local_output_dir}/22_map_reads_to_references/aggregate_mapping.csv"
-    run:
-        import pandas as pd
-        import logging
-
-        # Set up logging
-        log_file = output.csv.replace('.csv', '.log')
-        logging.basicConfig(
-            filename=log_file,
-            filemode='w',
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
-
-        logging.info("Starting aggregation of mapping results.")
-
-        # Initialize dictionaries
-        total_reads_dict = {}
-        data = []
-
-        # Process total_reads_files
-        for total_reads_file in input.total_reads_files:
-            try:
-                with open(total_reads_file, 'r') as f:
-                    line = f.readline().strip()
-                    if not line:
-                        logging.warning(f"File {total_reads_file} is empty. Skipping.")
-                        continue
-                    parts = line.split('\t')
-                    if len(parts) != 2:
-                        logging.error(f"File {total_reads_file} has {len(parts)} fields. Expected 2. Skipping.")
-                        continue
-                    sample, total_reads = parts
-                    print(parts)
-                    total_reads = int(total_reads)
-                    print("test: " + str(total_reads))
-                    total_reads_dict[sample] = total_reads
-                    logging.info(f"Processed total_reads for sample '{sample}': {total_reads}")
-            except Exception as e:
-                logging.error(f"Error processing file {total_reads_file}: {e}")
-                continue
-
-        # Process mapped_counts files
-        for counts_file in input.mapped_counts:
-            try:
-                with open(counts_file, 'r') as f:
-                    line = f.readline().strip()
-                    if not line:
-                        logging.warning(f"File {counts_file} is empty. Skipping.")
-                        continue
-                    parts = line.split('\t')
-                    if len(parts) != 3:
-                        logging.error(f"File {counts_file} has {len(parts)} fields. Expected 3. Skipping.")
-                        continue
-                    sample, reference, mapped_reads = parts
-                    mapped_reads = int(mapped_reads)
-                    total_reads = total_reads_dict.get(sample, 0)
-                    data.append({
-                        "sample": sample,
-                        "reference": reference,
-                        "mapped_reads": mapped_reads,
-                        "total_reads": total_reads
-                    })
-                    logging.info(f"Processed mapped_reads for sample '{sample}', reference '{reference}': {mapped_reads}")
-            except Exception as e:
-                logging.error(f"Error processing file {counts_file}: {e}")
-                continue
-
-        # Create DataFrame and write to CSV
-        if data:
-            df = pd.DataFrame(data)
-            print(df)
-            df.to_csv(output.csv, index=False)
-            logging.info(f"Successfully wrote aggregated data to {output.csv}")
-        else:
-            logging.warning("No data to aggregate. CSV file will not be created.")
-
+        contig_names = temp(f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.contigs.txt"),
+        filtered_fasta = f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.fa.gz"
+    log:
+        f"{log_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.fa.log"
+    threads: 1
+    shell:
+        """
+        # Extract contig names from the BED file
+        awk '{{print $1}}' {input.bed} > {output.contig_names}
+        
+        # Use seqkit to extract the corresponding sequences from the reference FASTA
+        seqkit grep -f {output.contig_names} {input.reference_fasta} | gzip > {output.filtered_fasta} 2> {log}
+        """
 
 ## Cleanup ##
 # Utility rule to run in isolation to remove existing output files.
