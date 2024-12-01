@@ -829,7 +829,8 @@ rule temp_microbial:
             f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.fa.gz",
             sample=[s['name'] for s in config['samples']],
             reference=reference_list
-        )
+        ),
+        f"{local_output_dir}/27_argos_aggregated/aggregated_results.csv"
 
 rule decompress_argos_reference_archive:
     """
@@ -1038,6 +1039,103 @@ rule extract_hq_fasta:
         # Use seqkit to extract the corresponding sequences from the reference FASTA
         seqkit grep -f {output.contig_names} {input.reference_fasta} | gzip > {output.filtered_fasta} 2> {log}
         """
+
+rule count_total_reads:
+    """
+    Count the total number of reads in each sample's FASTQ file using seqkit.
+    """
+    input:
+        reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz"
+    output:
+        total_reads = f"{local_output_dir}/27_argos_aggregated/{{sample}}.total_reads.txt"
+    log:
+        f"{log_dir}/27_argos_aggregated/{{sample}}.total.log"
+    shell:
+        """
+        seqkit stats -T {input.reads} | awk 'NR==2 {{print $4}}' > {output.total_reads} 2> {log}
+        """
+
+rule aggregate_results:
+    """
+    Aggregate results from multiple samples into a single CSV file.
+    """
+    input:
+        gc_files=lambda wildcards: expand(f"{local_output_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.txt", sample=[s['name'] for s in config["samples"]]),
+        mapped_reads_files=lambda wildcards: expand(f"{local_output_dir}/25_mapped_reads/{{sample}}/{{sample}}.mapped_reads.txt", sample=[s['name'] for s in config["samples"]]),
+        bed_files=lambda wildcards: expand(f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed", sample=[s['name'] for s in config["samples"]]),
+        total_reads_files=lambda wildcards: expand(f"{local_output_dir}/27_argos_aggregated/{{sample}}.total_reads.txt", sample=[s['name'] for s in config["samples"]])
+    output:
+        aggregated_csv = f"{local_output_dir}/27_argos_aggregated/aggregated_results.csv"
+    params:
+        experiment = config["global"]["experiment"],
+        argos_version = config["global"]["reference_archive"],
+        snakemake_run_id = config["run_id"]
+    run:
+        import pandas as pd
+
+        # Initialize an empty list to collect data
+        aggregated_data = []
+
+        # Map sample names to input files
+        samples=[s['name'] for s in config["samples"]]
+        print(samples)
+        sample_gc = dict(zip(samples, input.gc_files))
+        sample_mapped_reads = dict(zip(samples, input.mapped_reads_files))
+        sample_bed = dict(zip(samples, input.bed_files))
+        sample_total_reads = dict(zip(samples, input.total_reads_files))
+
+        for sample in samples:
+            # Get total_reads from total_reads file
+            total_reads_file = sample_total_reads[sample]
+            with open(total_reads_file, 'r') as f:
+                total_reads = int(float(f.read().strip()))
+
+            # Read genome coverage
+            gc_file = sample_gc[sample]
+            gc_df = pd.read_csv(gc_file, sep=' ', header=None, names=['argos_contig', 'genome_coverage'])
+
+            # Read mapped reads
+            mapped_reads_file = sample_mapped_reads[sample]
+            mapped_reads_df = pd.read_csv(mapped_reads_file, sep=' ', header=None, names=['argos_contig', 'mapped_reads'])
+
+            # Read BED file to get contig lengths
+            bed_file = sample_bed[sample]
+            bed_df = pd.read_csv(bed_file, sep='\t', header=None, names=['argos_contig', 'start', 'end'])
+            bed_df['argos_contig_length'] = bed_df['end'] - bed_df['start']
+
+            # Merge dataframes
+            df = gc_df.merge(mapped_reads_df, on='argos_contig', how='outer')
+            df = df.merge(bed_df[['argos_contig', 'argos_contig_length']], on='argos_contig', how='outer')
+
+            # Fill missing values with zeros
+            df['genome_coverage'] = df['genome_coverage'].fillna(0).astype(int)
+            df['mapped_reads'] = df['mapped_reads'].fillna(0).astype(int)
+            df['argos_contig_length'] = df['argos_contig_length'].fillna(0).astype(int)
+
+            # Add additional columns
+            df['sample_id'] = sample
+            df['experiment'] = params.experiment
+            df['argos_version'] = params.argos_version
+            df['snakemake_run_id'] = params.snakemake_run_id
+            df['total_reads'] = total_reads
+            # Extract argos_id (first element of argos_contig before first whitespace)
+            df['argos_id'] = df['argos_contig'].str.split().str[0]
+
+            # Reorder columns
+            df = df[['experiment', 'sample_id', 'argos_contig', 'argos_id', 'genome_coverage', 'mapped_reads', 'total_reads', 'argos_contig_length', 'argos_version', 'snakemake_run_id']]
+
+            # Append to aggregated_data
+            aggregated_data.append(df)
+
+        # Concatenate all dataframes
+        aggregated_df = pd.concat(aggregated_data, ignore_index=True)
+
+        # Sort by sample_id, then by largest number of mapped reads
+        aggregated_df = aggregated_df.sort_values(['sample_id', 'mapped_reads'], ascending=[True, False])
+
+        # Write to CSV
+        aggregated_df.to_csv(output.aggregated_csv, index=False)
+
 
 ## Cleanup ##
 # Utility rule to run in isolation to remove existing output files.
