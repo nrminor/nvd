@@ -885,7 +885,7 @@ rule argos_mapping:
     output:
         bam = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam",
         bai = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam.bai"
-    threads: 16
+    threads: 4
     params:
         mapper = lambda wildcards: "sr" if get_input_type(wildcards, config) not in ['ont', 'sra'] else "map-ont"
     log:
