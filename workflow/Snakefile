@@ -1060,10 +1060,26 @@ rule aggregate_results:
     Aggregate results from multiple samples into a single CSV file.
     """
     input:
-        gc_files=lambda wildcards: expand(f"{local_output_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.txt", sample=[s['name'] for s in config["samples"]]),
-        mapped_reads_files=lambda wildcards: expand(f"{local_output_dir}/25_mapped_reads/{{sample}}/{{sample}}.mapped_reads.txt", sample=[s['name'] for s in config["samples"]]),
-        bed_files=lambda wildcards: expand(f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed", sample=[s['name'] for s in config["samples"]]),
-        total_reads_files=lambda wildcards: expand(f"{local_output_dir}/27_argos_aggregated/{{sample}}.total_reads.txt", sample=[s['name'] for s in config["samples"]])
+        gc_files=lambda wildcards: expand(
+            f"{local_output_dir}/24_genome_coverage/{{sample}}/{{sample}}.gc.txt",
+            sample=[s['name'] for s in config["samples"]]
+        ),
+        mapped_reads_files=lambda wildcards: expand(
+            f"{local_output_dir}/25_mapped_reads/{{sample}}/{{sample}}.mapped_reads.txt",
+            sample=[s['name'] for s in config["samples"]]
+        ),
+        bed_files=lambda wildcards: expand(
+            f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed",
+            sample=[s['name'] for s in config["samples"]]
+        ),
+        total_reads_files=lambda wildcards: expand(
+            f"{local_output_dir}/27_argos_aggregated/{{sample}}.total_reads.txt",
+            sample=[s['name'] for s in config["samples"]]
+        ),
+        filtered_fasta_files=lambda wildcards: expand(
+            f"{local_output_dir}/26_hq_argos_contigs/{{sample}}/{{sample}}.fa.gz",
+            sample=[s['name'] for s in config["samples"]]
+        )
     output:
         aggregated_csv = f"{local_output_dir}/27_argos_aggregated/aggregated_results.csv"
     params:
@@ -1072,40 +1088,103 @@ rule aggregate_results:
         snakemake_run_id = config["run_id"]
     run:
         import pandas as pd
+        import gzip
+        from Bio import SeqIO
 
         # Initialize an empty list to collect data
         aggregated_data = []
 
+        # List of sample names
+        samples = [s['name'] for s in config["samples"]]
+
         # Map sample names to input files
-        samples=[s['name'] for s in config["samples"]]
-        print(samples)
         sample_gc = dict(zip(samples, input.gc_files))
         sample_mapped_reads = dict(zip(samples, input.mapped_reads_files))
         sample_bed = dict(zip(samples, input.bed_files))
         sample_total_reads = dict(zip(samples, input.total_reads_files))
+        sample_fasta = dict(zip(samples, input.filtered_fasta_files))
 
         for sample in samples:
+            print(f"Processing sample: {sample}")
+
             # Get total_reads from total_reads file
             total_reads_file = sample_total_reads[sample]
-            with open(total_reads_file, 'r') as f:
-                total_reads = int(float(f.read().strip()))
+            try:
+                with open(total_reads_file, 'r') as f:
+                    total_reads_str = f.read().strip()
+                    if total_reads_str:
+                        total_reads = int(float(total_reads_str))
+                    else:
+                        total_reads = 0
+                        print(f"Warning: Total reads file {total_reads_file} is empty for sample {sample}. Setting to 0.")
+            except (FileNotFoundError, ValueError):
+                total_reads = 0
+                print(f"Warning: Unable to read total_reads for sample {sample}. Setting to 0.")
 
             # Read genome coverage
             gc_file = sample_gc[sample]
-            gc_df = pd.read_csv(gc_file, sep=' ', header=None, names=['argos_contig', 'genome_coverage'])
+            try:
+                gc_df = pd.read_csv(
+                    gc_file, sep=' ', header=None, names=['argos_id', 'genome_coverage']
+                )
+            except pd.errors.EmptyDataError:
+                gc_df = pd.DataFrame(columns=['argos_id', 'genome_coverage'])
+                print(f"Warning: Genome coverage file {gc_file} is empty for sample {sample}.")
 
             # Read mapped reads
             mapped_reads_file = sample_mapped_reads[sample]
-            mapped_reads_df = pd.read_csv(mapped_reads_file, sep=' ', header=None, names=['argos_contig', 'mapped_reads'])
+            try:
+                mapped_reads_df = pd.read_csv(
+                    mapped_reads_file, sep=' ', header=None, names=['argos_id', 'mapped_reads']
+                )
+            except pd.errors.EmptyDataError:
+                mapped_reads_df = pd.DataFrame(columns=['argos_id', 'mapped_reads'])
+                print(f"Warning: Mapped reads file {mapped_reads_file} is empty for sample {sample}.")
 
             # Read BED file to get contig lengths
             bed_file = sample_bed[sample]
-            bed_df = pd.read_csv(bed_file, sep='\t', header=None, names=['argos_contig', 'start', 'end'])
-            bed_df['argos_contig_length'] = bed_df['end'] - bed_df['start']
+            try:
+                bed_df = pd.read_csv(
+                    bed_file, sep='\t', header=None, names=['argos_id', 'start', 'end']
+                )
+                bed_df['argos_contig_length'] = bed_df['end'] - bed_df['start']
+            except pd.errors.EmptyDataError:
+                bed_df = pd.DataFrame(columns=['argos_id', 'start', 'end', 'argos_contig_length'])
+                print(f"Warning: BED file {bed_file} is empty for sample {sample}.")
 
-            # Merge dataframes
-            df = gc_df.merge(mapped_reads_df, on='argos_contig', how='outer')
-            df = df.merge(bed_df[['argos_contig', 'argos_contig_length']], on='argos_contig', how='outer')
+            # Read filtered_fasta to get argos_contig mapping
+            fasta_file = sample_fasta[sample]
+            contig_to_desc = {}
+            try:
+                with gzip.open(fasta_file, 'rt') as handle:
+                    for record in SeqIO.parse(handle, "fasta"):
+                        header = record.description  # full header
+                        # Split the header into argos_id and argos_contig
+                        parts = header.split(None, 1)  # Split on first whitespace
+                        if len(parts) == 2:
+                            argos_id, argos_contig_desc = parts
+                        elif len(parts) == 1:
+                            argos_id = parts[0]
+                            argos_contig_desc = parts[0]
+                        else:
+                            # Handle cases with no header
+                            continue
+                        contig_to_desc[argos_id] = argos_contig_desc
+            except FileNotFoundError:
+                print(f"Warning: FASTA file {fasta_file} not found for sample {sample}.")
+            except gzip.BadGzipFile:
+                print(f"Warning: FASTA file {fasta_file} is not a valid gzip file for sample {sample}.")
+
+            # Assign 'argos_contig' based on 'argos_id'
+            if not mapped_reads_df.empty:
+                # Assign argos_contig using the mapping
+                mapped_reads_df['argos_contig'] = mapped_reads_df['argos_id'].map(contig_to_desc)
+            else:
+                mapped_reads_df['argos_contig'] = pd.Series(dtype='object')
+
+            # Merge dataframes on 'argos_id'
+            df = pd.merge(gc_df, mapped_reads_df, on='argos_id', how='outer')
+            df = pd.merge(df, bed_df[['argos_id', 'argos_contig_length']], on='argos_id', how='outer')
 
             # Fill missing values with zeros
             df['genome_coverage'] = df['genome_coverage'].fillna(0).astype(int)
@@ -1118,17 +1197,51 @@ rule aggregate_results:
             df['argos_version'] = params.argos_version
             df['snakemake_run_id'] = params.snakemake_run_id
             df['total_reads'] = total_reads
-            # Extract argos_id (first element of argos_contig before first whitespace)
-            df['argos_id'] = df['argos_contig'].str.split().str[0]
 
             # Reorder columns
-            df = df[['experiment', 'sample_id', 'argos_contig', 'argos_id', 'genome_coverage', 'mapped_reads', 'total_reads', 'argos_contig_length', 'argos_version', 'snakemake_run_id']]
+            df = df[[
+                'experiment',
+                'sample_id',
+                'argos_contig',
+                'argos_id',
+                'genome_coverage',
+                'mapped_reads',
+                'total_reads',
+                'argos_contig_length',
+                'argos_version',
+                'snakemake_run_id'
+            ]]
 
             # Append to aggregated_data
             aggregated_data.append(df)
 
-        # Concatenate all dataframes
-        aggregated_df = pd.concat(aggregated_data, ignore_index=True)
+        if aggregated_data:
+            # Concatenate all dataframes
+            aggregated_df = pd.concat(aggregated_data, ignore_index=True)
+        else:
+            # Create an empty DataFrame with the required columns if no data is present
+            aggregated_df = pd.DataFrame(columns=[
+                'experiment',
+                'sample_id',
+                'argos_contig',
+                'argos_id',
+                'genome_coverage',
+                'mapped_reads',
+                'total_reads',
+                'argos_contig_length',
+                'argos_version',
+                'snakemake_run_id'
+            ])
+
+        # Drop rows where 'argos_id' or 'argos_contig' is missing
+        aggregated_df = aggregated_df.dropna(subset=['argos_id', 'argos_contig'])
+
+        # Ensure 'argos_id' and 'argos_contig' are strings
+        aggregated_df['argos_id'] = aggregated_df['argos_id'].astype(str)
+        aggregated_df['argos_contig'] = aggregated_df['argos_contig'].astype(str)
+
+        # Remove duplicate rows
+        aggregated_df = aggregated_df.drop_duplicates()
 
         # Sort by sample_id, then by largest number of mapped reads
         aggregated_df = aggregated_df.sort_values(['sample_id', 'mapped_reads'], ascending=[True, False])
