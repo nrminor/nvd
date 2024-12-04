@@ -8,67 +8,132 @@ global:
   human_virus_taxlist: 'resources/human_viruses_taxlist.txt'
   out_dir: output
   gettax_sqlite_path: resources/gettax.sqlite
-  # Add configurations for reference mapping FDA-ARGOS targets
-  reference_archive: "resources/fda-argos-30843.tar.zst" 
-  reference_decompressed_dir: "resources/fda-argos-per-species-fasta"
-
-  # List of reference sequences to use for mapping
-  # If not specified, all references in the archive will be used by default
-  # Example:
-  # reference_sequences:
-  #   - Streptococcus_pneumoniae
-  #   - Streptomyces_californicus
-
-  reference_sequences:
-    - Campylobacter_coli
-    - Campylobacter_jejuni
-    - Escherichia_coli
+  argos_fasta: "resources/fda-argos-30843.fa.gz" 
 
 samples:
-  - name: "3776"
-    r1_fastq: "data/3776_S5_L004_R1_001.fastq.gz"
-    r2_fastq: "data/3776_S5_L004_R2_001.fastq.gz"
+  - name: "test"
+    r1_fastq: "data/3831.100k.R1.fq.gz"
+    r2_fastq: "data/3831.100k.R2.fq.gz"
+  # - name: "3776"
+  #   r1_fastq: "data/3776_S5_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/3776_S5_L004_R2_001.fastq.gz"
 
-  - name: "3806"
-    r1_fastq: "data/3806_S7_L004_R1_001.fastq.gz"
-    r2_fastq: "data/3806_S7_L004_R2_001.fastq.gz"
+  # - name: "3806"
+  #   r1_fastq: "data/3806_S7_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/3806_S7_L004_R2_001.fastq.gz"
 
-  - name: "3831"
-    r1_fastq: "data/3831_S11_L004_R1_001.fastq.gz"
-    r2_fastq: "data/3831_S11_L004_R2_001.fastq.gz"
+  # - name: "3831"
+  #   r1_fastq: "data/3831_S11_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/3831_S11_L004_R2_001.fastq.gz"
 
-  - name: "3874"
-    r1_fastq: "data/3874_S9_L004_R1_001.fastq.gz"
-    r2_fastq: "data/3874_S9_L004_R2_001.fastq.gz"
+  # - name: "3874"
+  #   r1_fastq: "data/3874_S9_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/3874_S9_L004_R2_001.fastq.gz"
 
-  - name: "3907"
-    r1_fastq: "data/3907_S10_L004_R1_001.fastq.gz"
-    r2_fastq: "data/3907_S10_L004_R2_001.fastq.gz"
+  # - name: "3907"
+  #   r1_fastq: "data/3907_S10_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/3907_S10_L004_R2_001.fastq.gz"
 
-  - name: "3914"
-    r1_fastq: "data/3914_S6_L004_R1_001.fastq.gz"
-    r2_fastq: "data/3914_S6_L004_R2_001.fastq.gz"
+  # - name: "3914"
+  #   r1_fastq: "data/3914_S6_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/3914_S6_L004_R2_001.fastq.gz"
 
-  - name: "3932"
-    r1_fastq: "data/3932_S4_L004_R1_001.fastq.gz"
-    r2_fastq: "data/3932_S4_L004_R2_001.fastq.gz"
+  # - name: "3932"
+  #   r1_fastq: "data/3932_S4_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/3932_S4_L004_R2_001.fastq.gz"
 
-  - name: "3937"
-    r1_fastq: "data/3937_S8_L004_R1_001.fastq.gz"
-    r2_fastq: "data/3937_S8_L004_R2_001.fastq.gz"
+  # - name: "3937"
+  #   r1_fastq: "data/3937_S8_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/3937_S8_L004_R2_001.fastq.gz"
 
-  - name: "7430"
-    r1_fastq: "data/7430_S3_L004_R1_001.fastq.gz"
-    r2_fastq: "data/7430_S3_L004_R2_001.fastq.gz"
+  # - name: "7430"
+  #   r1_fastq: "data/7430_S3_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/7430_S3_L004_R2_001.fastq.gz"
 
-  - name: "9A41"
-    r1_fastq: "data/9A41_S1_L004_R1_001.fastq.gz"
-    r2_fastq: "data/9A41_S1_L004_R2_001.fastq.gz"
+  # - name: "9A41"
+  #   r1_fastq: "data/9A41_S1_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/9A41_S1_L004_R2_001.fastq.gz"
 
-  - name: "A840"
-    r1_fastq: "data/A840_S2_L004_R1_001.fastq.gz"
-    r2_fastq: "data/A840_S2_L004_R2_001.fastq.gz"
+  # - name: "A840"
+  #   r1_fastq: "data/A840_S2_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/A840_S2_L004_R2_001.fastq.gz"
 
-  - name: "neg-ctl"
-    r1_fastq: "data/neg-ctl_S12_L004_R1_001.fastq.gz"
-    r2_fastq: "data/neg-ctl_S12_L004_R2_001.fastq.gz"
+  # - name: "neg-ctl"
+  #   r1_fastq: "data/neg-ctl_S12_L004_R1_001.fastq.gz"
+  #   r2_fastq: "data/neg-ctl_S12_L004_R2_001.fastq.gz"
+
+  # - name: "BOS_DITP_N_10_30"
+  #   r1_fastq: "data/BOS_DITP_N_10_30_S11_R1.fastq.gz"
+  #   r2_fastq: "data/BOS_DITP_N_10_30_S11_R2.fastq.gz"
+
+  # - name: "BOS_DITP_N_11_6"
+  #   r1_fastq: "data/BOS_DITP_N_11_6_S3_R1.fastq.gz"
+  #   r2_fastq: "data/BOS_DITP_N_11_6_S3_R2.fastq.gz"
+
+  # - name: "BOS_DITP_S_10_30"
+  #   r1_fastq: "data/BOS_DITP_S_10_30_S10_R1.fastq.gz"
+  #   r2_fastq: "data/BOS_DITP_S_10_30_S10_R2.fastq.gz"
+
+  # - name: "BOS_DITP_S_11_6"
+  #   r1_fastq: "data/BOS_DITP_S_11_6_S8_R1.fastq.gz"
+  #   r2_fastq: "data/BOS_DITP_S_11_6_S8_R2.fastq.gz"
+
+  # - name: "CHI_Calument_10_27"
+  #   r1_fastq: "data/CHI_Calument_10_27_S7_R1.fastq.gz"
+  #   r2_fastq: "data/CHI_Calument_10_27_S7_R2.fastq.gz"
+
+  # - name: "CHI_Obrien_10_27"
+  #   r1_fastq: "data/CHI_Obrien_10_27_S5_R1.fastq.gz"
+  #   r2_fastq: "data/CHI_Obrien_10_27_S5_R2.fastq.gz"
+
+  # - name: "CHI_Stickney_SWS_10_27"
+  #   r1_fastq: "data/CHI_Stickney_SWS_10_27_S9_R1.fastq.gz"
+  #   r2_fastq: "data/CHI_Stickney_SWS_10_27_S9_R2.fastq.gz"
+
+  # - name: "CHI_Stickney_WS_10_27"
+  #   r1_fastq: "data/CHI_Stickney_WS_10_27_S2_R1.fastq.gz"
+  #   r2_fastq: "data/CHI_Stickney_WS_10_27_S2_R2.fastq.gz"
+
+  # - name: "Negative_Control_11_13"
+  #   r1_fastq: "data/Negative_Control_11_13_S1_R1.fastq.gz"
+  #   r2_fastq: "data/Negative_Control_11_13_S1_R2.fastq.gz"
+
+  # - name: "PS_LVC"
+  #   r1_fastq: "data/PS_LVC_S15_R1.fastq.gz"
+  #   r2_fastq: "data/PS_LVC_S15_R2.fastq.gz"
+
+  # - name: "PS_UC1_LVC"
+  #   r1_fastq: "data/PS_UC1_LVC_S12_R1.fastq.gz"
+  #   r2_fastq: "data/PS_UC1_LVC_S12_R2.fastq.gz"
+
+  # - name: "SC_10_16"
+  #   r1_fastq: "data/SC_10_16_S18_R1.fastq.gz"
+  #   r2_fastq: "data/SC_10_16_S18_R2.fastq.gz"
+
+  # - name: "SC_10_17"
+  #   r1_fastq: "data/SC_10_17_S17_R1.fastq.gz"
+  #   r2_fastq: "data/SC_10_17_S17_R2.fastq.gz"
+
+  # - name: "SC_10_21"
+  #   r1_fastq: "data/SC_10_21_S13_R1.fastq.gz"
+  #   r2_fastq: "data/SC_10_21_S13_R2.fastq.gz"
+
+  # - name: "SC_10_24"
+  #   r1_fastq: "data/SC_10_24_S19_R1.fastq.gz"
+  #   r2_fastq: "data/SC_10_24_S19_R2.fastq.gz"
+
+  # - name: "SC_10_25"
+  #   r1_fastq: "data/SC_10_25_S23_R1.fastq.gz"
+  #   r2_fastq: "data/SC_10_25_S23_R2.fastq.gz"
+
+  # - name: "SC_10_29"
+  #   r1_fastq: "data/SC_10_29_S24_R1.fastq.gz"
+  #   r2_fastq: "data/SC_10_29_S24_R2.fastq.gz"
+
+  # - name: "SC_10_30"
+  #   r1_fastq: "data/SC_10_30_S21_R1.fastq.gz"
+  #   r2_fastq: "data/SC_10_30_S21_R2.fastq.gz"
+
+  # - name: "SC_11_1"
+  #   r1_fastq: "data/SC_11_1_S20_R1.fastq.gz"
+  #   r2_fastq: "data/SC_11_1_S20_R2.fastq.gz"

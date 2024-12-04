@@ -47,19 +47,7 @@ final_output_path = f"{config['global']['out_dir']}/{experiment}" # for local ta
 human_virus_taxlist = config['global']['human_virus_taxlist'] # human virus family taxa + arteriviridae
 
 # For FDA-ARGOS mapping
-reference_archive = config["global"]["reference_archive"]
-reference_decompressed_dir = config["global"]["reference_decompressed_dir"]
-reference_sequences = config.get("global", {}).get("reference_sequences", [])
-
-if reference_sequences:
-    # Remove file extensions from reference names
-    reference_list = [re.sub(r'\.fasta(?:\.gz)?$', '', os.path.basename(ref)) for ref in reference_sequences]
-else:
-    # Cannot list the directory before it exists, so raise an error
-    raise ValueError(
-        "No reference sequences specified in config.yaml under 'reference_sequences'. "
-        "Please specify the list of reference sequences to use."
-    )
+argos_fasta = config["global"]["argos_fasta"]
 
 # Path to results directory
 local_output_dir = 'results'
@@ -75,10 +63,13 @@ rule all:
             f"{{local_output_dir}}/20_map_reads_to_contigs/{{sample}}.bam",
             f"{{local_output_dir}}/21_create_tarball/{{sample}}.tar.zst",
             f"{{local_output_dir}}/19_labkey/{{sample}}.upload.done",
+            f"{{local_output_dir}}/26_hq_argos_contigs/{{sample}}/{{sample}}.bam",
+            f"{{local_output_dir}}/26_hq_argos_contigs/{{sample}}/{{sample}}.fa.gz"
         ],
         local_output_dir=local_output_dir,
         sample=[s['name'] for s in config['samples']]
     )
+    
 rule prepare_input:
     """
     This workflow expects FASTQ sequences
@@ -786,30 +777,6 @@ rule upload_files_to_labkey:
 ## 2024-11-29 - add microbial non-viral targets ##
 # find reads that map exactly to FDA-ARGOS targets
 
-rule all_microbial:
-    input:
-        # Decompress references
-        expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list),
-        # Filtered BAM files
-        expand(
-            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}.filtered.bam",
-            sample=[s['name'] for s in config['samples']],
-            reference=reference_list
-        ),
-        # Mapped counts
-        expand(
-            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/{{reference}}_mapped_counts.txt",
-            sample=[s['name'] for s in config['samples']],
-            reference=reference_list
-        ),
-        # Total reads counts
-        expand(
-            f"{local_output_dir}/22_map_reads_to_references/{{sample}}/total_reads.txt",
-            sample=[s['name'] for s in config['samples']]
-        ),
-        # Aggregate CSV
-        f"{local_output_dir}/22_map_reads_to_references/aggregate_mapping.csv"
-
 rule temp_microbial:
     input:
         # Decompress references
@@ -832,56 +799,15 @@ rule temp_microbial:
         ),
         f"{local_output_dir}/27_argos_aggregated/aggregated_results.csv"
 
-rule decompress_argos_reference_archive:
-    """
-    Decompress the FDA-ARGOS reference archive and ensure reference files are directly within the target directory.
-    """
-    input:
-        archive = reference_archive
-    output:
-        references = expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list)
-    shell:
-        """
-        mkdir -p {reference_decompressed_dir}
-        tar -I zstd -xvf {input.archive} -C {reference_decompressed_dir}
-        
-        # Move inner directory contents up if necessary
-        # Needed depending on how .tar.zst archive is created
-        inner_dir=$(find {reference_decompressed_dir} -mindepth 1 -maxdepth 1 -type d)
-        if [ -d "$inner_dir" ]; then
-            mv "$inner_dir"/* {reference_decompressed_dir}/
-            rmdir "$inner_dir"
-        fi
-        """
-
-rule concatenate_argos_fasta_for_baiting:
-    """
-    Concatenate all the ARGOS sequences into a single compressed FASTA file.
-    The FASTA file is a mapping target for baiting - finding all possible exact matches first
-    So that exhaustive searching is far more efficient.
-    """
-    input:
-        references = expand(f"{reference_decompressed_dir}/{{reference}}.fasta.gz", reference=reference_list)
-    output:
-        "resources/argos.fa.gz"
-    params:
-        dir = reference_decompressed_dir
-    shell:
-        """
-        find {params.dir} -name '*.fasta.gz' -exec cat {{}} + > {output}
-        """
-
 rule argos_mapping:
     """
     Map reads to concatenated ARGOS sequences.
-    For Illumina reads, use bbmap to retain only perfect paired read matches
-    Use trimreaddescriptions=t to match ONT BAM format
-    For ONT reads, use minimap2 and then reformat.sh to retain subfilter=0/clipfilter=0 mapped reads
+    Use minimap2 and then reformat.sh to retain subfilter=0/clipfilter=0 mapped reads
     Then sort and index BAM
     """
     input:
         reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz",
-        reference = "resources/argos.fa.gz"
+        reference = f"{argos_fasta}"
     output:
         bam = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam",
         bai = f"{local_output_dir}/23_argos_mapping/{{sample}}/{{sample}}.argos.bam.bai"
@@ -892,42 +818,19 @@ rule argos_mapping:
         f"{log_dir}/23_argos_mapping/{{sample}}/argos_baited.log"
     shell:
        """
-        if [ "{params.mapper}" = "sr" ]; then
-            # Mapping with BBMap for short reads
-            {{
-                bbmap.sh \
-                    ref={input.reference} \
-                    in={input.reads} \
-                    outm=stdout.bam \
-                    perfectmode=t \
-                    threads={threads} \
-                    mappedonly=t \
-                    pairedonly=t \
-                    ow=t \
-                    nodisk=t \
-                    ambig=all \
-                    trimreaddescriptions=t \
-                    -Xmx64g \
-                | samtools sort -o {output.bam} - \
-                    && samtools index {output.bam}
-            }} > {log} 2>&1
-        
-        else
-            # Mapping with Minimap2 for long reads
-            {{ 
-                minimap2 --eqx -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
-                | reformat.sh \
-                    in=stdin.sam \
-                    ref={input.reference} \
-                    out=stdout.bam \
-                    subfilter=0 \
-                    clipfilter=0 \
-                    mappedonly=t \
-                    -Xmx64g \
-                | samtools sort -o {output.bam} - \
-                    && samtools index {output.bam}
-            }} > {log} 2>&1
-        fi
+       {{ 
+        minimap2 --eqx -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
+        | reformat.sh \
+            in=stdin.sam \
+            ref={input.reference} \
+            out=stdout.bam \
+            subfilter=0 \
+            clipfilter=0 \
+            mappedonly=t \
+            -Xmx64g \
+        | samtools sort -o {output.bam} - \
+            && samtools index {output.bam}
+        }} > {log} 2>&1
         """
 
 rule argos_genome_coverage:
