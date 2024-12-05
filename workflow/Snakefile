@@ -872,7 +872,8 @@ rule argos_mapped_reads_per_contig:
 
 rule hq_argos_contigs:
     """
-    Extract contig names with genome coverage >= 500 bp and create a BED file.
+    Extract contig names with genome coverage >= 2000 bp and create a BED file.
+    This seems like a decent balance sensitivity and specificity
     """
     input:
         coverage = f"{local_output_dir}/22_genome_coverage/{{sample}}/{{sample}}.gc.txt",
@@ -890,7 +891,7 @@ rule hq_argos_contigs:
         samtools idxstats {input.idxstats} > {wildcards.sample}_contig_lengths.txt
         
         # Join coverage file with contig lengths on contig name
-        awk 'NR==FNR{{cov[$1]=$2; next}} $1 in cov && cov[$1]>=500 {{print $1"\t0\t"$2}}' {input.coverage} {wildcards.sample}_contig_lengths.txt > {output.bed}
+        awk 'NR==FNR{{cov[$1]=$2; next}} $1 in cov && cov[$1]>=2000 {{print $1"\t0\t"$2}}' {input.coverage} {wildcards.sample}_contig_lengths.txt > {output.bed}
         
         # Clean up
         rm {wildcards.sample}_contig_lengths.txt
@@ -899,7 +900,7 @@ rule hq_argos_contigs:
 
 rule extract_hq_bam:
     """
-    Create a new BAM file containing only contigs with genome coverage >= 500 bp.
+    Create a new BAM file containing only contigs with genome coverage >= 2000 bp.
     """
     input:
         bam = f"{local_output_dir}/21_argos_mapping/{{sample}}/{{sample}}.argos.bam",
@@ -921,7 +922,7 @@ rule extract_hq_bam:
 
 rule extract_hq_fasta:
     """
-    Extract reference sequences corresponding to contigs with genome coverage >= 500 bp.
+    Extract reference sequences corresponding to contigs with genome coverage >= 2000 bp.
     """
     input:
         bed = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed",
