@@ -17,3 +17,5 @@ docker
 *.out
 *.pyc
 config
+ref
+fda-argos*
