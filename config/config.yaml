@@ -8,7 +8,7 @@ global:
   human_virus_taxlist: 'resources/human_viruses_taxlist.txt'
   out_dir: output
   gettax_sqlite_path: resources/gettax.sqlite
-  argos_fasta: "resources/fda-argos-30843.fa.gz"
+  argos_fasta: "resources/fda-argos-30843.fa.gz" 
 samples:
 - name: Illumina_test
   r1_fastq: data/illumina.R1.fq.gz
