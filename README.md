@@ -25,17 +25,20 @@
 ## About NVD
 ![NVD flowchart](nvd_flow.png)
 
-NVD is an opinionated workflow for identifying and exploring metagenomes for families of viruses that infect humans. It is opinionated in that it focuses narrowly on these virus families to the exclusion of other potentially interesting viral and non-viral microbial taxa. NVD works with arbitrarily large Oxford Nanopore and Illumina datasets without downsampling. The results are available in a LabKey Server data explorer available to O'Connor lab users and collaborators. For those without LabKey data explorer access, results are stored locally.
+NVD is an opinionated workflow for identifying and exploring metagenomes for:
+- Families of viruses that infect humans.
+- Sequences that support the presence of microbial reads in [FDA-ARGOS](https://www.fda.gov/medical-devices/science-and-research-medical-devices/database-reference-grade-microbial-sequences-fda-argos).
+It is opinionated in that it focuses narrowly on these tasks to the exclusion of other potentially interesting viral and non-viral microbial taxa. NVD works with arbitrarily large Oxford Nanopore and Illumina datasets without downsampling. The results are available in a LabKey Server data explorer available to O'Connor lab users and collaborators. For those without LabKey data explorer access, results are stored locally.
 
 ### Why Another Metagenomic Workflow?
 
-Good question. When I started working on NVD in June 2024, I hoped to find a widely used, easy-to-use workflow optimized for viral metagenomics. [CZID](https://czid.org) is excellent, but downsamples to a subset of reads. Sometimes this isn't a problem; sometimes it causes substantial reductions in sensitivity. The outstanding [Sourmash](https://github.com/sourmash-bio/sourmash) tools perform informative, efficient searches against reference databases but do not generate contigs that can be used to characterize interesting viruses.
+Good question. When I started working on NVD in June 2024, I hoped to find a widely used, easy-to-use workflow optimized for viral metagenomics. [CZID](https://czid.org) is excellent, but downsamples to a subset of reads. Sometimes this isn't a problem; sometimes it causes substantial reductions in sensitivity. The outstanding [Sourmash](https://github.com/sourmash-bio/sourmash) tools perform informative, efficient searches against reference databases but do not generate contigs that can be used to characterize interesting viruses. In December 2024 I added functionality for exploring matches to FDA-ARGOS reference microbial genomes.
 
 ### What Does NVD Do?
 
 NVD begins with one or more Illumina paired-end or Oxford Nanopore datasets. It can also evaluate datasets downloaded from NCBI SRA. In the case of Illumina datasets, paired-end sequences are interleaved and properly paired using the bbmap `repair.sh` tool before processing.
 
-These reads are the classified with the NCBI STAT tool, specifically the `aligns_to` command. A tax list containing the entire subtree of the virus families that infect humans is used for classification. This means that NVD is designed to find members of these virus families:
+These reads are classified with the NCBI STAT tool, specifically the `aligns_to` command. A tax list containing the entire subtree of the virus families that infect humans is used for classification. This means that NVD is designed to find members of these virus families:
 
 - Adenoviridae
 - Anelloviridae
@@ -77,13 +80,15 @@ These viral contigs are then used as BLAST queries against the NCBI `core-nt` da
 Additionally, the putative viral reads are mapped against the viral contigs. This allows further exploration and confirmation of any unexpected or unusual hits.
 
 The blast classifications, read mapping information, and associated contig metadata are then saved to an output folder in CSV format (and loaded into a database in the O'Connor lab LabKey Server, if appropriate access credentials are provided). `.zst` archives containing useful data files (e.g., read mapping `.bam` files) are also saved in the output folder.
+
+The input reads are also mapped to 4,889 sequences in the [FDA-ARGOS](https://www.ncbi.nlm.nih.gov/bioproject/231221) database. Reads are mapped with `minimap` and then filtered using `reformat.sh` to retain only reads with no soft clipping or substitutions relative to the reference sequence. That is, sequences that are exact matches or exact matches with one or more indels, to improve sensitivity with ONT data. Read coverage of each reference sequence is computed and all reference sequences with at least 2kb of read coverage (an opinionated but ultimately arbitrary threshold that seems to strike a good balance between sensitivity and specificity) are retained. For each of these high-quality microbial hits, data on genome coverage and the number of mapped reads are saved to a CSV file (and loaded into a database in the O'Connor lab LabKey Server if appropriate credentials are provided). FDA-ARGOS reference sequences for these hits and the `.bam` files of reads mapped to these references are saved in the `.zst` archive for additional exploration.  
   
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- GETTING STARTED -->
 ## Getting Started
 
-NVD is written in Snakemake and has its dependencies bundled in an Apptainer container. NVD should work on machines with at least 32GB of available RAM. The `resources.zst` file is approximately 230GB. After decompression, it is approximately 300GB. The amount of storage needed depends on the size of the FASTQ files; 530GB plus 3x the size of the input FASTQ files is a good guide. For example, if the input FASTQ files are 100GB, ensure that at least 830GB of storage are available. Most testing has been done on Ubuntu Linux, however, a Dockerfile for replicating the Apptainer image is available for running on Macs running Docker Desktop.
+NVD is written in Snakemake and has its dependencies bundled in an Apptainer container. NVD should work on machines with at least 32GB of available RAM. The `resources.zst` file is approximately 250GB. After decompression, it is approximately 285GB. The amount of storage needed depends on the size of the FASTQ files; 550GB plus 3x the size of the input FASTQ files is a good guide. For example, if the input FASTQ files are 100GB, ensure that at least 850GB of storage are available. Most testing has been done on Ubuntu Linux, however, a Dockerfile for replicating the Apptainer image is available for running on Macs running Docker Desktop.
 
 ### Prerequisites
 
@@ -92,11 +97,23 @@ NVD is written in Snakemake and has its dependencies bundled in an Apptainer con
 - [Apptainer](https://apptainer.org/docs/admin/main/installation.html) (for Linux)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for MacOS)
 - [Snakemake](https://snakemake.readthedocs.io/en/stable/)
-- The `resources.zst` archive containing NCBI BLAST `core-nt`, NCBI STAT databases, a taxonomic rank database, and a taxonomic list of the subtree of human-infecting virus families.
+- The `resources.zst` archive containing:
+	- NCBI BLAST `core-nt`
+   	- NCBI STAT databases
+   	- A taxonomic rank database
+    	- A taxonomic list of the subtree of human-infecting virus families
+   	- A gzipped-FASTA file with the FDA-ARGOS sequences
 
-The `resources.20240830.zst` version contains `core-nt` downloaded from NCBI on 2024-08-03, the STAT tree index downloaded 2024-08-30, the STAT tree filter.dbss and associated annotations downloaded 2024-08-30, `gettax.sqlite` downloaded on 2024-08-30, and a `human_viruses_taxlist.txt` created on 2024-09-05. 
-- The `workflow` folder containing the Snakemake workflow and associated python scripts
-- A `config` folder containing a `config.yaml` file specifying runtime variables and the samples to be analyzed. You also need to get the LabKey API Key, LabKey username, and LabKey password information from DHO for LabKey integration.
+The `resources.20241204.zst` version contains:
+- `core-nt` downloaded from NCBI on 2024-08-03
+- the STAT tree index downloaded 2024-08-30
+- the STAT tree filter.dbss and associated annotations downloaded 2024-08-30
+- `gettax.sqlite` downloaded on 2024-08-30
+- a `human_viruses_taxlist.txt` created on 2024-09-05
+- an FDA-ARGOS database downloaded on 2024-12-01.
+  
+The `workflow` folder containing the Snakemake workflow and associated python scripts
+The `config` folder containing a `config.yaml` file specifying runtime variables and the samples to be analyzed. You also need to get the LabKey API Key, LabKey username, and LabKey password information from DHO for LabKey integration.
 
 ### Linux Installation
 
@@ -110,17 +127,12 @@ The `resources.20240830.zst` version contains `core-nt` downloaded from NCBI on 
 	conda activate nvd
 	conda install -y snakemake apptainer -c conda-forge
 	``` 
-3. [Download](https://g-2e5b4e.dtn.globus.wisc.edu/nvd/nvd.30572.sif)) the Apptainer image file. If you have Globus access, this link is much, much faster than the `wget` access command shown below:.
-   ```sh
-   wget https://dholk.primate.wisc.edu/_webdav/dho/projects/lungfish/InfinitePath/public/%40files/nvd.30572.sif
-   ```
-4. [Download](https://g-2e5b4e.dtn.globus.wisc.edu/nvd/resources.20240830.zst) the `resources.zst` file containing databases and taxonomy files (note, this is ~230GB and will take a while to download. I suggest going out for an iced tea while you wait). If you have Globus access, this link is much, much faster than the `wget` access command shown below:
-   ```sh
-   wget https://dholk.primate.wisc.edu/_webdav/dho/projects/lungfish/InfinitePath/public/%40files/resources.20240830.zst
-   ```
+3. [Download](https://dholk.primate.wisc.edu/_webdav/dho/projects/lungfish/InfinitePath/public/%40files/nvd.30572.sif) the Apptainer image file.
+
+4. [Download][(https://g-2e5b4e.dtn.globus.wisc.edu/nvd/resources.20241204.zst] the `resources.zst` file containing databases and taxonomy files. Note, this is ~250GB and will take a while to download. I suggest going out for an iced tea while you wait.
 5. Decompress the `resources.zst` file in the working directory and remove source after decompression
    ```sh
-   tar -I zstd -xvf resources.20240830.zst && rm resources.20240830.zst
+   tar -I zstd -xvf resources.20241204.zst && rm resources.20241204.zst
    ```
 6. Copy gzipped-FASTQ files to process into `data` folder within the working directory.
 7. Modify the `config.yaml` file to specify the experiment number (an integer) and an output directory.
@@ -137,7 +149,7 @@ The `resources.20240830.zst` version contains `core-nt` downloaded from NCBI on 
    ```
    Many samples can be processed in the same workflow invokation. Multiple sample types can be processed at once. There is also a version of this workflow that runs one sample at a time on [CHTC](https://chtc.cs.wisc.edu) execute nodes. Ask DHO for details. 
    (note: if you have access to upload results to the LabKey data explorer, you will also need to add LabKey credentials to the `config.yaml` file. Ask DHO for details.)
-10. Start an Apptainer shell in the working directory with the repo files
+9. Start an Apptainer shell in the working directory with the repo files
    ```
    apptainer shell nvd.30572.sif
    ```
@@ -157,7 +169,7 @@ After installation, there should be `data`, `config`, `resources`, and `workflow
 	conda activate nvd
 	conda install -y snakemake -c conda-forge
 	```
-4. [Download](https://g-2e5b4e.dtn.globus.wisc.edu/nvd/nvd.30572.tar) the Docker image file. If you have Globus access, this link is much, much faster than the `wget` access command shown below:
+4. [Download](https://g-2e5b4e.dtn.globus.wisc.edu/nvd/nvd.30572.tar](https://dholk.primate.wisc.edu/_webdav/dho/projects/lungfish/InfinitePath/public/%40files/nvd.30572.tar) the Docker image file. If you have Globus access, this link is much, much faster than the `wget` access command shown below:
    ```sh
    wget https://dholk.primate.wisc.edu/_webdav/dho/projects/lungfish/InfinitePath/public/%40files/nvd.30572.tar
    ```
@@ -165,13 +177,10 @@ After installation, there should be `data`, `config`, `resources`, and `workflow
    ```sh
    docker load -i docker/nvd.tar
    ```
-6. [Download](https://g-2e5b4e.dtn.globus.wisc.edu/nvd/resources.20240830.zst) the `resources.zst` file containing databases and taxonomy files (note, this is ~230GB and will take a while to download. I suggest going out for an iced tea while you wait). If you have Globus access, this link is much, much faster than the `wget` access command shown below:
-   ```sh
-   wget https://dholk.primate.wisc.edu/_webdav/dho/projects/lungfish/InfinitePath/public/%40files/resources.20240830.zst
-   ```
+6. [Download](https://dholk.primate.wisc.edu/_webdav/dho/projects/lungfish/InfinitePath/public/%40files/resources.20241204.zst)) the `resources.zst` file containing databases and taxonomy files. Note, this is ~250GB and will take a while to download. I suggest going out for an iced tea while you wait.
 7. Decompress the `resources.zst` file in the working directory and remove source after decompression
    ```sh
-   tar -I zstd -xvf resources.20240830.zst && rm resources.20240830.zst
+   tar -I zstd -xvf resources.20241204.zst && rm resources.20241204.zst
    ```
 8. Copy gzipped-FASTQ files to process into `data` folder within the working directory.
 9. Modify the `config.yaml` file to specify the samples to process and the path(s) to their FASTQ files. Here are example entries for the three supported file types:
@@ -225,6 +234,7 @@ Use this carefully, since regenerating the `results` directory would require re-
 ## Roadmap
 
 - 2024-09-10 - first public release version
+- 2024-12-04 - added FDA ARGOS microbial read searching
 - I expect to update the databases approximately annually to incorporate newly discovered virus sequences
 
 See the [open issues](https://github.com/dhoconno/nvd/issues) for a full list of proposed features (and known issues).
@@ -263,7 +273,7 @@ See `LICENSE.txt` for more information.
 <!-- CONTACT -->
 ## Contact
 
-Dave O'Connor - [@dho](https://twitter.com/dho) - dhoconno@wisc.edu
+Dave O'Connor - [https://twitter.com/dho](https://bsky.app/profile/dhoconno.bsky.social) - dhoconno@wisc.edu
 
 Project Link: [https://github.com/dhoconno/nvd](https://github.com/dhoconno/nvd)
 
@@ -273,8 +283,9 @@ Project Link: [https://github.com/dhoconno/nvd](https://github.com/dhoconno/nvd)
 ## Acknowledgments
 
 * [Marc Johnson](https://medicine.missouri.edu/faculty/marc-johnson-phd) and [Shelby O'Connor](https://slo.pathology.wisc.edu), my partners in innovative pathogen monitoring from environmental samples.
-* Kenneth Katz, NCBI, for developing NCBI STAT, maintaining pre-built databases for STAT, and helpful discusssions
+* Kenneth Katz, NCBI, for developing NCBI STAT, maintaining pre-built databases for STAT, and helpful discussions
 * [C. Titus Brown](https://www.vetmed.ucdavis.edu/faculty/c-titus-brown), for helpful discussions of using kmer classifiers as part of metagenomic workflows
+* [Tim Stinear](https://www.doherty.edu.au/people/tim-stinear), [Ryan Wick](https://github.com/rrwick), and [Calum Walsh](https://biomedicalsciences.unimelb.edu.au/research/emcra/researcher-profiles/calum-walsh) for brainstorming ways of identifying non-viral microbial sequences
 * Development funded by [Inkfish](https://ink.fish)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
