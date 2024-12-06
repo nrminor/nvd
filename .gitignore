@@ -18,3 +18,4 @@ docker
 *.pyc
 config
 ref
+fda-argos*
