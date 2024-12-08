@@ -1,21 +1,25 @@
-data
-results
-logs
-resources
-blast
-chtc
-staging
-apptainer
-.snakemake
-fasterq*
-temp*
-.ncbi
-.parallel
-output
-docker
-*.log
-*.out
-*.pyc
-config
-ref
-fda-argos*
+*
+
+# project root files
+!.gitignore
+!LICENSE
+!README.md
+!nvd_flow.png
+
+# configuration example
+!/config
+!/config/example_config.yaml
+!/config/example_config.yml
+
+# example data
+!/data
+!/data/README.md
+!/data/illumina.R1.fq.gz
+!/data/illumina.R2.fq.gz
+!/data/ont.fq.gz
+
+# workflow files
+!/workflow
+!/workflow/Snakefile
+!/workflow/scripts
+!/workflow/scripts/*.py
