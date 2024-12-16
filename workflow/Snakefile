@@ -107,6 +107,7 @@ rule extract_potential_human_virus_family_reads:
     threads: 4
     shell:
         """
+        {{
         seqkit fq2fa --threads 1 {input.reads} \
         | aligns_to.3.1.1 \
         -dbss {input.stat_dbss} \
@@ -116,7 +117,8 @@ rule extract_potential_human_virus_family_reads:
         | cut -f1 \
         | seqkit grep -f - \
         {input.reads} \
-        -o {output} 2> {log} | tee {log}
+        -o {output}
+        }} > {log} 2>&1
         """
 
 rule run_spades:
@@ -142,8 +144,10 @@ rule run_spades:
         )
     shell:
         """
+        {{
         mkdir -p {params.outdir}
-        ({params.spades_cmd} {input.reads} -t {threads} -o {params.outdir} || true) 2>&1 | tee {log}
+        ({params.spades_cmd} {input.reads} -t {threads} -o {params.outdir} || true) 2>&1
+        }} > {log} 2>&1
         """
 
 rule move_spades_output:
@@ -160,13 +164,15 @@ rule move_spades_output:
         f"{log_dir}/03_de_novo_assemble/{{sample}}_move.log"
     shell:
         """
+        {{
         if [ -s {input.contigs} ]; then
             mv {input.contigs} {output.final_contigs}
             rm -rf {params.assembly_dir}
         else
             touch {output.final_contigs}
-            echo "No contigs were assembled or SPAdes encountered an error. Created an empty file." >> {log}
+            echo "No contigs were assembled or SPAdes encountered an error. Created an empty file."
         fi
+        }} > {log} 2>&1
         """
 
 rule mask_low_complexity_contigs:
@@ -188,16 +194,17 @@ rule mask_low_complexity_contigs:
         entropy = 0.9
     shell:
         """
+        {{
         if [ -s {input.contigs} ]; then
             bbmask.sh -Xmx{resources.mem_mb}m \
                 in={input.contigs} \
                 out={output.masked_contigs} \
-                entropy={params.entropy} \
-                2>&1 | tee {log}
+                entropy={params.entropy}
         else
             touch {output.masked_contigs}
-            echo "Input file is empty. Created an empty output file." >> {log}
+            echo "Input file is empty. Created an empty output file."
         fi
+        }} > {log} 2>&1
         """
 
 rule exclude_short_contigs:
@@ -221,17 +228,18 @@ rule exclude_short_contigs:
         qtrim = "t"
     shell:
         """
+        {{       
         if [ -s {input.masked_contigs} ]; then
             reformat.sh -Xmx{resources.mem_mb}m \
                 in={input.masked_contigs} \
                 out={output.filtered_contigs} \
                 qtrim={params.qtrim} \
-                minconsecutivebases={params.min_consecutive_bases} \
-                2>&1 | tee {log}
+                minconsecutivebases={params.min_consecutive_bases} 
         else
             touch {output.filtered_contigs}
-            echo "Input file is empty. Created an empty output file." >> {log}
+            echo "Input file is empty. Created an empty output file." 
         fi
+        }} > {log} 2>&1
         """
 
 rule classify_contigs_first_pass:
@@ -287,12 +295,14 @@ rule classify_contigs_second_pass:
         f"{log_dir}/06_classify_contigs/{{sample}}.classify_reads_second_pass.txt"
     shell:
         """
+        {{
         aligns_to.3.1.1 \
             -tax_list {input.tax_list} \
             -dbss {input.tree_filter} \
             -num_threads 1 \
             {input.fasta_file} \
-            > {output.second_pass_stat_file} 2> {log}
+            > {output.second_pass_stat_file}
+        }} > {log} 2>&1
         """
 
 rule generate_stat_contig_report:
@@ -392,6 +402,7 @@ rule megablast:
         f"{log_dir}/10_megablast/{{sample}}.benchmark.txt"
     shell:
         """
+        {{
         export BLASTDB={params.blastdb}
         if [ -s {input.contigs} ]; then
             blastn -task {params.task} \
@@ -400,11 +411,12 @@ rule megablast:
                 -num_threads {threads} \
                 -outfmt "{params.outfmt}" \
                 -max_target_seqs {params.max_target_seqs} \
-                -out {output.blast_results} 2> {log}
+                -out {output.blast_results}
         else
             touch {output.blast_results}
-            echo "Input file is empty. Created an empty output file." >> {log}
+            echo "Input file is empty. Created an empty output file."
         fi
+        }} > {log} 2>&1
         """
 
 rule annotate_megablast_results:
@@ -499,6 +511,7 @@ rule blastn_classify:
         f"{log_dir}/14_blastn_classify/{{sample}}.benchmark.txt"
     shell:
         """
+        {{
         export BLASTDB={params.blastdb}
         if [ -s {input.contigs} ]; then
             blastn -task {params.task} \
@@ -507,11 +520,12 @@ rule blastn_classify:
                 -num_threads {threads} \
                 -outfmt "{params.outfmt}" \
                 -max_target_seqs {params.max_target_seqs} \
-                -out {output.blast_results} 2> {log}
+                -out {output.blast_results}
         else
             touch {output.blast_results}
-            echo "Input file is empty. Created an empty output file." >> {log}
+            echo "Input file is empty. Created an empty output file."
         fi
+        }} > {log} 2>&1
         """
 
 rule annotate_blastn_results:
@@ -573,12 +587,14 @@ rule merge_annotated_blast_results:
         f"{log_dir}/17_merge_annotated_blast_results/{{sample}}.benchmark.txt"
     shell:
         """
+        {{
         if [ -s {input.megablast} ] || [ -s {input.blastn} ]; then
-            cat {input.megablast} {input.blastn} > {output.merged} 2> {log}
+            cat {input.megablast} {input.blastn} > {output.merged}
         else
             touch {output.merged}
-            echo "Both input files are empty. Created an empty output file." > {log}
+            echo "Both input files are empty. Created an empty output file."
         fi
+        }} > {log} 2>&1
         """
 
 rule extract_unclassified_contigs:
@@ -679,10 +695,12 @@ rule map_reads_to_contigs:
         mapper = lambda wildcards, input: "map-ont" if get_input_type(wildcards, config) in ['ont', 'sra'] else "sr"
     shell:
         """
+        {{
         (minimap2 -ax {params.mapper} -t {threads} {input.contigs} {input.reads} | \
         samtools view -b -F 4 | \
         samtools sort -@ {threads} -o {output.bam} && \
-        samtools index {output.bam}) 2>&1 | tee {log}
+        samtools index {output.bam})
+        }} > {log} 2>&1
         """
 
 rule count_mapped_reads:
@@ -703,9 +721,11 @@ rule count_mapped_reads:
         f"{log_dir}/20_map_reads_to_contigs/{{sample}}.count.benchmark.txt"
     shell:
         """
+        {{
         samtools view -F 2304 -b {input.bam} > {output.filtered_bam}
         samtools index {output.filtered_bam}
-        samtools idxstats {output.filtered_bam} | awk '{{print $1, $3}}' > {output.counts} 2>&1 | tee {log}
+        samtools idxstats {output.filtered_bam} | awk '{{print $1, $3}}' > {output.counts}
+        }} > {log} 2>&1
         """
 
 rule create_tarball:
@@ -720,7 +740,7 @@ rule create_tarball:
         f"{log_dir}/21_create_tarball/{{sample}}.log"
     shell:
         """
-        (
+        {{
             # Initialize an empty list to hold the valid files
             valid_files=""
             
@@ -729,17 +749,17 @@ rule create_tarball:
                 if [ -s "$file" ]; then
                     valid_files="$valid_files $file"
                 else
-                    echo "Skipping missing or empty file: $file" >> {log}
+                    echo "Skipping missing or empty file: $file"
                 fi
             done
             
             # Only create the tarball if there are valid files
             if [ -n "$valid_files" ]; then
-                tar -I zstd -cvf {output.tarball} $valid_files >> {log} 2>&1
+                tar -I zstd -cvf {output.tarball} $valid_files
             else
-                echo "No valid files to include in the tarball." >> {log}
+                echo "No valid files to include in the tarball."
             fi
-        ) >> {log} 2>&1
+        }} > {log} 2>&1
         """
         
 rule upload_files_to_labkey:
