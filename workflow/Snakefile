@@ -9,12 +9,6 @@
 # docker run -it --user $(id -u):$(id -g) -v $(pwd)/:/scratch -w /scratch nvd:30575
 # snakemake --cores 10 --config run_id=`date +%s`
 
-import os
-import tarfile
-import shutil
-import pandas as pd
-from snakemake.shell import shell
-
 # Import utility functions
 from scripts.workflow_functions import (
     get_input_files,
@@ -46,33 +40,24 @@ stat_annotation = config['global']['stat_annotation'] # provided by Kenneth Katz
 final_output_path = f"{config['global']['out_dir']}/{experiment}" # for local tarball of results
 human_virus_taxlist = config['global']['human_virus_taxlist'] # human virus family taxa + arteriviridae
 
-# For FDA-ARGOS mapping
-argos_fasta = config["global"]["argos_fasta"]
-
 # Path to results directory
 local_output_dir = 'results'
 log_dir = 'logs'
 
 rule all:
     input:
-        expand(
-            [
-                "{local_output_dir}/09_extract_human_virus_contigs/{sample}.fa",
-                "{local_output_dir}/18_extract_unclassified_contigs/{sample}.unclassified.fa",
-                "{local_output_dir}/19_labkey/{sample}.blast.tkn",
-                "{local_output_dir}/19_labkey/{sample}.fasta.tkn",
-                "{local_output_dir}/20_map_reads_to_contigs/{sample}.bam",
-                "{local_output_dir}/26_create_tarball/{sample}.tar.zst",
-                "{local_output_dir}/19_labkey/{sample}.upload.done",
-                "{local_output_dir}/24_hq_argos_contigs/{sample}/{sample}.bam",
-                "{local_output_dir}/24_hq_argos_contigs/{sample}/{sample}.fa.gz"
-            ],
-            local_output_dir=local_output_dir,
-            sample=[s['name'] for s in config['samples']]
-        ) + [
-            f"{local_output_dir}/25_argos_aggregated/aggregated_results.csv"
-        ]
-
+        expand([
+            f"{{local_output_dir}}/09_extract_human_virus_contigs/{{sample}}.fa",
+            f"{{local_output_dir}}/18_extract_unclassified_contigs/{{sample}}.unclassified.fa",
+            f"{{local_output_dir}}/19_labkey/{{sample}}.blast.tkn",
+            f"{{local_output_dir}}/19_labkey/{{sample}}.fasta.tkn",
+            f"{{local_output_dir}}/20_map_reads_to_contigs/{{sample}}.bam",
+            f"{{local_output_dir}}/21_create_tarball/{{sample}}.tar.zst",
+            f"{{local_output_dir}}/19_labkey/{{sample}}.upload.done"
+        ],
+        local_output_dir=local_output_dir,
+        sample=[s['name'] for s in config['samples']]
+    )
 rule prepare_input:
     """
     This workflow expects FASTQ sequences
@@ -88,7 +73,7 @@ rule prepare_input:
         sra_accession = lambda wildcards: get_sra_accession(wildcards, config) if get_input_type(wildcards, config) == "sra" else None,
         temp_dir = lambda wildcards: f"{wildcards.sample}.temp",
         sample = "{sample}"
-    threads: 4
+    threads: 1
     log:
         f"{log_dir}/01_prepare_input/{{sample}}.log"
     benchmark:
@@ -647,7 +632,7 @@ rule labkey_upload_blast:
         fastq_file = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz"
     output:
         token = touch(f"{local_output_dir}/19_labkey/{{sample}}.blast.tkn"),
-        csv_file = touch(f"{config['global']['out_dir']}/{{sample}}.csv")  # Ensures the CSV is always an output
+        csv_file = f"{config['global']['out_dir']}/{{sample}}.csv"  # Ensures the CSV is always an output
     threads: 1
     resources:
         mem_mb = 4000
@@ -748,14 +733,11 @@ rule create_tarball:
         virus_contigs = f"{local_output_dir}/09_extract_human_virus_contigs/{{sample}}.fa",
         unclassified_contigs = f"{local_output_dir}/18_extract_unclassified_contigs/{{sample}}.unclassified.fa",
         mapped_reads = f"{local_output_dir}/20_map_reads_to_contigs/{{sample}}.bam",
-        mapped_reads_index = f"{local_output_dir}/20_map_reads_to_contigs/{{sample}}.bam.bai",
-        argos_mapped_reads = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.bam",
-        argos_mapped_reads_index = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.bam.bai",
-        argos_used_refs = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.fa.gz"
+        mapped_reads_index = f"{local_output_dir}/20_map_reads_to_contigs/{{sample}}.bam.bai"
     output:
-        tarball = f"{local_output_dir}/26_create_tarball/{{sample}}.tar.zst"
+        tarball = f"{local_output_dir}/21_create_tarball/{{sample}}.tar.zst"
     log:
-        f"{log_dir}/26_create_tarball/{{sample}}.log"
+        f"{log_dir}/21_create_tarball/{{sample}}.log"
     shell:
         """
         {{
@@ -763,13 +745,7 @@ rule create_tarball:
             valid_files=""
             
             # Check each file for existence and non-zero size
-            for file in {input.virus_contigs} \
-            {input.unclassified_contigs} \
-            {input.mapped_reads} \
-            {input.mapped_reads_index} \
-            {input.argos_mapped_reads} \
-            {input.argos_mapped_reads_index} \
-            {input.argos_used_refs}; do
+            for file in {input.virus_contigs} {input.unclassified_contigs} {input.mapped_reads} {input.mapped_reads_index}; do
                 if [ -s "$file" ]; then
                     valid_files="$valid_files $file"
                 else
@@ -785,7 +761,7 @@ rule create_tarball:
             fi
         }} > {log} 2>&1
         """
-
+        
 rule upload_files_to_labkey:
     input:
         tarball = rules.create_tarball.output.tarball,
@@ -805,214 +781,6 @@ rule upload_files_to_labkey:
         f"{log_dir}/19_labkey/{{sample}}.files.log"
     script:
         "scripts/upload_files_to_labkey.py"
-
-## 2024-11-29 - add microbial non-viral targets ##
-# find reads that map exactly to FDA-ARGOS targets
-
-rule argos_mapping:
-    """
-    Map reads to concatenated ARGOS sequences.
-    Use minimap2 and then reformat.sh to retain subfilter=0/clipfilter=0 mapped reads
-    Then sort and index BAM
-    """
-    input:
-        reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz",
-        reference = argos_fasta
-    output:
-        bam = f"{local_output_dir}/21_argos_mapping/{{sample}}/{{sample}}.argos.bam",
-        bai = f"{local_output_dir}/21_argos_mapping/{{sample}}/{{sample}}.argos.bam.bai"
-    threads: 4
-    params:
-        mapper = lambda wildcards: "sr" if get_input_type(wildcards, config) not in ['ont', 'sra'] else "map-ont"
-    log:
-        f"{log_dir}/21_argos_mapping/{{sample}}/argos_baited.log"
-    shell:
-       """
-       {{ 
-        minimap2 --eqx -ax {params.mapper} -t {threads} {input.reference} {input.reads} \
-        | reformat.sh \
-            in=stdin.sam \
-            ref={input.reference} \
-            out=stdout.bam \
-            subfilter=0 \
-            clipfilter=0 \
-            mappedonly=t \
-            -Xmx64g \
-        | samtools sort -o {output.bam} - \
-            && samtools index {output.bam}
-        }} > {log} 2>&1
-        """
-
-rule argos_genome_coverage:
-    """
-    Compute genome coverage for each contig.
-    Use samtools depth to determine per-base coverage,
-    then awk to compute the number of bases with coverage per contig.
-    """
-    input:
-        bam = f"{local_output_dir}/21_argos_mapping/{{sample}}/{{sample}}.argos.bam"
-    output:
-        gc = f"{local_output_dir}/22_genome_coverage/{{sample}}/{{sample}}.gc.txt"
-    threads: 1
-    log:
-        f"{log_dir}/22_genome_coverage/{{sample}}/{{sample}}.gc.log"
-    benchmark:
-        f"{log_dir}/22_genome_coverage/{{sample}}/{{sample}}.gc.benchmark"
-    shell:
-        """
-        {{
-            samtools depth {input.bam} \
-            | awk '{{cov[$1] += ($3 > 0)}} END {{for (c in cov) print c, cov[c]}}' \
-            > {output.gc}
-        }} > {log} 2>&1
-        """
-
-rule argos_mapped_reads_per_contig:
-    """
-    Compute the number of mapped reads for each contig.
-    Filters out contigs with zero mapped reads.
-    Uses samtools idxstats to obtain per-contig read counts.
-    """
-    input:
-        bam = f"{local_output_dir}/21_argos_mapping/{{sample}}/{{sample}}.argos.bam"
-    output:
-        mapped_reads = f"{local_output_dir}/23_argos_mapped_reads/{{sample}}/{{sample}}.mapped_reads.txt"
-    threads: 1
-    log:
-        f"{log_dir}/23_argos_mapped_reads/{{sample}}/{{sample}}.mapped_reads.log"
-    benchmark:
-        f"{log_dir}/23_argos_mapped_reads/{{sample}}/{{sample}}.mapped_reads.benchmark"
-    shell:
-        """
-        {{
-        samtools idxstats {input.bam} | \
-        awk '$3 >= 1 {{print $1, $3}}' > {output.mapped_reads} 2> {log}
-        }}  2> {log}
-        """
-
-rule hq_argos_contigs:
-    """
-    Extract contig names with genome coverage >= 2000 bp and create a BED file.
-    This seems like a decent balance sensitivity and specificity
-    """
-    input:
-        coverage = f"{local_output_dir}/22_genome_coverage/{{sample}}/{{sample}}.gc.txt",
-        idxstats = f"{local_output_dir}/21_argos_mapping/{{sample}}/{{sample}}.argos.bam"
-    output:
-        bed = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed"
-    log:
-        f"{log_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.log"
-    benchmark:
-        f"{log_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.benchmark"
-    shell:
-        """
-        {{
-        # Extract contig lengths
-        samtools idxstats {input.idxstats} > {wildcards.sample}_contig_lengths.txt
-        
-        # Join coverage file with contig lengths on contig name
-        awk 'NR==FNR{{cov[$1]=$2; next}} $1 in cov && cov[$1]>=2000 {{print $1"\t0\t"$2}}' {input.coverage} {wildcards.sample}_contig_lengths.txt > {output.bed}
-        
-        # Clean up
-        rm {wildcards.sample}_contig_lengths.txt
-        }}  2> {log}
-        """
-
-rule extract_hq_bam:
-    """
-    Create a new BAM file containing only contigs with genome coverage >= 2000 bp.
-    """
-    input:
-        bam = f"{local_output_dir}/21_argos_mapping/{{sample}}/{{sample}}.argos.bam",
-        bed = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed"
-    output:
-        filtered_bam = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.bam",
-        filtered_bai = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.bam.bai"
-    log:
-        f"{log_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.bam.log"
-    benchmark:
-        f"{log_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.bam.benchmark"
-    shell:
-        """
-        {{
-        samtools view -b -L {input.bed} {input.bam} > {output.filtered_bam}
-        samtools index {output.filtered_bam}
-        }} 2> {log}
-        """
-
-rule extract_hq_fasta:
-    """
-    Extract reference sequences corresponding to contigs with genome coverage >= 2000 bp.
-    """
-    input:
-        bed = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed",
-        reference_fasta = argos_fasta
-    output:
-        contig_names = temp(f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.contigs.txt"),
-        filtered_fasta = f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.fa.gz"
-    log:
-        f"{log_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.fa.log"
-    threads: 1
-    shell:
-        """
-        # Extract contig names from the BED file
-        awk '{{print $1}}' {input.bed} > {output.contig_names}
-        
-        # Use seqkit to extract the corresponding sequences from the reference FASTA
-        seqkit grep -f {output.contig_names} {input.reference_fasta} | gzip > {output.filtered_fasta} 2> {log}
-        """
-
-rule count_total_reads:
-    """
-    Count the total number of reads in each sample's FASTQ file using seqkit.
-    """
-    input:
-        reads = f"{local_output_dir}/01_prepare_input/{{sample}}.fq.gz"
-    output:
-        total_reads = f"{local_output_dir}/25_argos_aggregated/{{sample}}.total_reads.txt"
-    log:
-        f"{log_dir}/25_argos_aggregated/{{sample}}.total.log"
-    shell:
-        """
-        seqkit stats -T {input.reads} | awk 'NR==2 {{print $4}}' > {output.total_reads} 2> {log}
-        """
-
-rule aggregate_results:
-    """
-    Aggregate results from multiple samples into a single CSV file and upload to LabKey.
-    """
-    input:
-        gc_files=lambda wildcards: expand(
-            f"{local_output_dir}/22_genome_coverage/{{sample}}/{{sample}}.gc.txt",
-            sample=[s['name'] for s in config["samples"]]
-        ),
-        mapped_reads_files=lambda wildcards: expand(
-            f"{local_output_dir}/23_argos_mapped_reads/{{sample}}/{{sample}}.mapped_reads.txt",
-            sample=[s['name'] for s in config["samples"]]
-        ),
-        bed_files=lambda wildcards: expand(
-            f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.hq_argos_contigs.bed",
-            sample=[s['name'] for s in config["samples"]]
-        ),
-        total_reads_files=lambda wildcards: expand(
-            f"{local_output_dir}/25_argos_aggregated/{{sample}}.total_reads.txt",
-            sample=[s['name'] for s in config["samples"]]
-        ),
-        filtered_fasta_files=lambda wildcards: expand(
-            f"{local_output_dir}/24_hq_argos_contigs/{{sample}}/{{sample}}.fa.gz",
-            sample=[s['name'] for s in config["samples"]]
-        )
-    output:
-        aggregated_csv = f"{local_output_dir}/25_argos_aggregated/aggregated_results.csv"
-    params:
-        experiment = config["global"]["experiment"],
-        argos_version = config["global"]["argos_fasta"],
-        snakemake_run_id = config["run_id"],
-        labkey_server = config["global"]["labkey_server"],
-        project_name = config["global"]["labkey_project_name"],
-        api_key = config["global"]["labkey_api_key"]
-    script:
-        "scripts/labkey_upload_argos.py"
 
 ## Cleanup ##
 # Utility rule to run in isolation to remove existing output files.
